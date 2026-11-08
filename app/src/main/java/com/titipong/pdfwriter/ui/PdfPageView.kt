@@ -42,6 +42,9 @@ class PdfPageView(context: Context) : View(context) {
         fun onItemsErased(page: Int)
         fun requestText(page: Int, x: Float, y: Float)
         fun isBookmarked(page: Int): Boolean
+        /** Search matches on this page (normalized rects), and those of the current match. */
+        fun searchHits(page: Int): List<RectF>? = null
+        fun activeSearchHit(page: Int): List<RectF>? = null
     }
 
     /** How the page looks: paper color, and filters for the page image and the ink. */
@@ -102,6 +105,17 @@ class PdfPageView(context: Context) : View(context) {
             invalidateInk()
         }
 
+    var hits: List<RectF>? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+    var activeHits: List<RectF>? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     /** Draws a bookmark ribbon at the top-right corner. */
     var bookmarked = false
         set(value) {
@@ -131,6 +145,8 @@ class PdfPageView(context: Context) : View(context) {
     private val dst = RectF()
     private val ribbonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EF4444") }
     private val ribbonPath = Path()
+    private val hitPaint = Paint().apply { color = Color.argb(100, 250, 204, 21) }
+    private val activeHitPaint = Paint().apply { color = Color.argb(140, 249, 115, 22) }
 
     // Page pixels -> view pixels, and back.
     private val toView = Matrix()
@@ -215,6 +231,15 @@ class PdfPageView(context: Context) : View(context) {
         matrixDirty = false
     }
 
+    /** Where a normalized page point ends up in this view (y), e.g. to scroll a search match into view. */
+    fun viewYOf(nx: Float, ny: Float): Float {
+        ensureMatrix()
+        pt[0] = nx * pageScale
+        pt[1] = ny * pageScale
+        toView.mapPoints(pt)
+        return pt[1]
+    }
+
     /** Full page width in view pixels: the size the page bitmap should be rendered at. */
     fun renderWidth(): Int {
         ensureMatrix()
@@ -244,6 +269,11 @@ class PdfPageView(context: Context) : View(context) {
             dst.set(0f, 0f, s, pageAspect * s)
             bitmapPaint.colorFilter = lk.pageFilter
             canvas.drawBitmap(bmp, null, dst, bitmapPaint)
+        }
+        hits?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, hitPaint) }
+        activeHits?.forEach { r ->
+            val pad = 2f * density
+            canvas.drawRect(r.left * s - pad, r.top * s - pad, r.right * s + pad, r.bottom * s + pad, activeHitPaint)
         }
         canvas.restore()
 

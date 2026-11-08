@@ -51,6 +51,26 @@ class PdfDocumentRenderer private constructor(
         }
     }
 
+    /** Renders a page at [width] pixels without caching (for OCR). Caller recycles the bitmap. */
+    suspend fun renderUncached(index: Int, width: Int): Bitmap? = withContext(dispatcher) {
+        if (closed || index !in 0 until pageCount) return@withContext null
+        val h = (width * aspects[index]).toInt().coerceAtLeast(1)
+        val bmp = try {
+            Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
+        } catch (oom: OutOfMemoryError) {
+            cache.evictAll()
+            return@withContext null
+        }
+        val page = renderer.openPage(index)
+        try {
+            bmp.eraseColor(Color.WHITE)
+            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+        } finally {
+            page.close()
+        }
+        bmp
+    }
+
     /**
      * Finds the area of the page that isn't blank paper, in normalized coordinates
      * (x across the width 0..1, y in width units). Renders a small copy just for this.

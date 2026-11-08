@@ -40,6 +40,18 @@
                 android:src="@drawable/ic_bookmark" />
 
             <ImageButton
+                android:id="@+id/btnSearch"
+                style="@style/ToolButton"
+                android:contentDescription="@string/search"
+                android:src="@drawable/ic_search" />
+
+            <ImageButton
+                android:id="@+id/btnOcr"
+                style="@style/ToolButton"
+                android:contentDescription="@string/ocr"
+                android:src="@drawable/ic_ocr" />
+
+            <ImageButton
                 android:id="@+id/btnViewMode"
                 style="@style/ToolButton"
                 android:contentDescription="@string/view_mode"
@@ -126,6 +138,70 @@
                 android:textSize="12sp" />
         </LinearLayout>
     </HorizontalScrollView>
+
+    <LinearLayout
+        android:id="@+id/searchBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginStart="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_search" />
+
+        <EditText
+            android:id="@+id/searchInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="@android:color/transparent"
+            android:hint="@string/search_hint"
+            android:imeOptions="actionSearch"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:minHeight="48dp"
+            android:paddingHorizontal="12dp"
+            android:textSize="16sp" />
+
+        <TextView
+            android:id="@+id/searchCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:textColor="#6B7280"
+            android:textSize="13sp" />
+
+        <ImageButton
+            android:id="@+id/btnSearchPrev"
+            style="@style/ToolButton"
+            android:contentDescription="@string/search_prev"
+            android:src="@drawable/ic_chevron_up" />
+
+        <ImageButton
+            android:id="@+id/btnSearchNext"
+            style="@style/ToolButton"
+            android:contentDescription="@string/search_next"
+            android:src="@drawable/ic_chevron_down" />
+
+        <ImageButton
+            android:id="@+id/btnSearchList"
+            style="@style/ToolButton"
+            android:contentDescription="@string/search_list"
+            android:src="@drawable/ic_list" />
+
+        <ImageButton
+            android:id="@+id/btnSearchClose"
+            style="@style/ToolButton"
+            android:contentDescription="@string/close"
+            android:src="@drawable/ic_close" />
+    </LinearLayout>
 
     <View
         android:layout_width="match_parent"

@@ -42,6 +42,15 @@ class PageAdapter(
     var renderScale = 1f
 
     fun positionOf(page: Int): Int = if (page in positionOfPage.indices) positionOfPage[page] else 0
+    /** The page view showing [page], if it's on screen. */
+    fun pageViewFor(rv: RecyclerView, page: Int): PdfPageView? {
+        if (page !in positionOfPage.indices) return null
+        val pos = positionOfPage[page]
+        val holder = rv.findViewHolderForAdapterPosition(pos) as? Holder ?: return null
+        val i = spreads[pos].indexOf(page)
+        return if (i >= 0) holder.spread.pages[i] else null
+    }
+
     fun firstPageAt(position: Int): Int = spreads.getOrNull(position)?.firstOrNull() ?: -1
     fun notifyPage(page: Int, payload: Any) {
         if (page in positionOfPage.indices) notifyItemChanged(positionOfPage[page], payload)
@@ -72,6 +81,13 @@ class PageAdapter(
             }
             return
         }
+        if (payloads.contains(SEARCH_PAYLOAD)) {
+            s.forEachIndexed { i, page ->
+                holder.spread.pages[i].hits = host.searchHits(page)
+                holder.spread.pages[i].activeHits = host.activeSearchHit(page)
+            }
+            if (payloads.all { it == SEARCH_PAYLOAD }) return
+        }
         if (payloads.contains(INK_PAYLOAD)) {
             s.forEachIndexed { i, page ->
                 holder.spread.pages[i].bookmarked = host.isBookmarked(page)
@@ -94,6 +110,8 @@ class PageAdapter(
             v.look = config.look
             v.annotations = host.annotationsFor(page)
             v.bookmarked = host.isBookmarked(page)
+            v.hits = host.searchHits(page)
+            v.activeHits = host.activeSearchHit(page)
             v.bitmap = null
             render(holder, i, page)
         }
@@ -129,6 +147,7 @@ class PageAdapter(
     companion object {
         const val INK_PAYLOAD = "ink"
         const val RERENDER_PAYLOAD = "rerender"
+        const val SEARCH_PAYLOAD = "search"
 
         fun buildSpreads(count: Int, layout: PageLayout): List<IntArray> {
             val out = ArrayList<IntArray>()

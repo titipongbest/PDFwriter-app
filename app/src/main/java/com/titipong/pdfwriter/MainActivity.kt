@@ -13,6 +13,8 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -23,6 +25,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -38,6 +41,8 @@ import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.TextNote
+import com.titipong.pdfwriter.ocr.OcrEngine
+import com.titipong.pdfwriter.search.SearchIndex
 import com.titipong.pdfwriter.pdf.PdfAnnotationIO
 import com.titipong.pdfwriter.pdf.PdfDocumentRenderer
 import com.titipong.pdfwriter.storage.AnnotationStorage
@@ -101,7 +106,16 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // Page overview
     private var gridAdapter: PageGridAdapter? = null
     private var bookmarkAdapter: BookmarkAdapter? = null
-    private var pendingOrder: List<Int?>? = null
+    /** A change to the document itself (page layout, OCR text layer) waiting for a "save as" target. */
+    private class BaseChange(
+        val transform: suspend (File, File) -> Unit,
+        val newPages: MutableMap<Int, PageAnnotations>,
+        val newBookmarks: MutableList<Bookmark>,
+        val okMessage: Int,
+        val failMessage: Int,
+        val progressMessage: String
+    )
+    private var pendingChange: BaseChange? = null
     /** While pages are being rearranged, no other PDF write may run (it would restore the old layout). */
     private var applyingPages = false
 
@@ -113,6 +127,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private var readingTexts: List<String>? = null
     private var readingAdapter: ReadingAdapter? = null
     private var readingJob: Job? = null
+
+    // Search
+    private var searchIndex: SearchIndex? = null
+    private var searchIndexJob: Job? = null
+    private var searchDebounce: Job? = null
+    private var hits: List<SearchIndex.Hit> = emptyList()
+    private var hitIndex = -1
+    private var hitsByPage: Map<Int, List<RectF>> = emptyMap()
 
     private val toolButtons = mutableMapOf<DrawTool, View>()
     private val colorViews = mutableListOf<View>()
@@ -129,15 +151,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** "Save as new file" for page edits on a file that can't be overwritten. */
     private val exportEdited = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
-        val order = pendingOrder
-        pendingOrder = null
-        if (uri != null && order != null) applyPageEdits(order, uri, openAfter = true)
+        val change = pendingChange
+        pendingChange = null
+        if (uri != null && change != null) commitBaseChange(change, uri, openAfter = true)
     }
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
             if (binding.pagesPanel.visibility == View.VISIBLE) {
                 closePanelOrEdit()
+            } else if (binding.searchBar.visibility == View.VISIBLE) {
+                closeSearch()
             } else if (viewSettings.reading) {
                 exitReading()
             }
@@ -145,7 +169,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun updateBackEnabled() {
-        backCallback.isEnabled = binding.pagesPanel.visibility == View.VISIBLE || viewSettings.reading
+        backCallback.isEnabled = binding.pagesPanel.visibility == View.VISIBLE ||
+            binding.searchBar.visibility == View.VISIBLE || viewSettings.reading
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -238,6 +263,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (document != null) exportPdf.launch(docName.removeSuffix(".pdf") + "-annotated.pdf")
             true
         }
+        R.id.action_search -> {
+            openSearch()
+            true
+        }
+        R.id.action_ocr -> {
+            showOcrDialog()
+            true
+        }
         R.id.action_view_mode -> {
             showViewModeDialog()
             true
@@ -283,6 +316,29 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnUndo.setOnClickListener { undoLast() }
         binding.btnPages.setOnClickListener { openPanel(bookmarksTab = false) }
         binding.btnViewMode.setOnClickListener { showViewModeDialog() }
+        binding.btnSearch.setOnClickListener { openSearch() }
+        binding.btnOcr.setOnClickListener { showOcrDialog() }
+        binding.btnSearchClose.setOnClickListener { closeSearch() }
+        binding.btnSearchNext.setOnClickListener { stepHit(+1) }
+        binding.btnSearchPrev.setOnClickListener { stepHit(-1) }
+        binding.btnSearchList.setOnClickListener { showHitList() }
+        binding.searchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                searchDebounce?.cancel()
+                runSearch(binding.searchInput.text.toString())
+                hideKeyboard()
+                true
+            } else {
+                false
+            }
+        }
+        binding.searchInput.doAfterTextChanged { text ->
+            searchDebounce?.cancel()
+            searchDebounce = lifecycleScope.launch {
+                delay(500)
+                runSearch(text?.toString() ?: "")
+            }
+        }
         binding.btnTextSmaller.setOnClickListener { changeReadingSize(-2f) }
         binding.btnTextBigger.setOnClickListener { changeReadingSize(+2f) }
         binding.btnReadingExit.setOnClickListener { exitReading() }
@@ -383,6 +439,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun annotationsFor(page: Int): PageAnnotations = pages.getOrPut(page) { PageAnnotations() }
 
     override fun isBookmarked(page: Int): Boolean = bookmarks.any { it.page == page }
+
+    override fun searchHits(page: Int): List<RectF>? = hitsByPage[page]
+
+    override fun activeSearchHit(page: Int): List<RectF>? =
+        hits.getOrNull(hitIndex)?.takeIf { it.page == page }?.rects
 
     override fun onItemAdded(page: Int, item: Any) {
         history.addLast(page to item)
@@ -697,13 +758,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         val order = g.order()
         if (pdfWritable) {
-            applyPageEdits(order, docUri ?: return, openAfter = false)
+            commitBaseChange(pageEditChange(order), docUri ?: return, openAfter = false)
         } else {
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.read_only_pages_title)
                 .setMessage(R.string.read_only_pages_msg)
                 .setPositiveButton(R.string.save_as_new) { _, _ ->
-                    pendingOrder = order
+                    pendingChange = pageEditChange(order)
                     exportEdited.launch(docName.removeSuffix(".pdf") + "-edited.pdf")
                 }
                 .setNegativeButton(R.string.cancel, null)
@@ -716,12 +777,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
      * rebuilds the pages, writes ink and bookmarks for the new layout into [dest],
      * and only then switches the app over, so a failure leaves everything as it was.
      */
-    private fun applyPageEdits(order: List<Int?>, dest: Uri, openAfter: Boolean) {
-        val src = localCopy ?: return
-        val key = docKey ?: return
+    private fun pageEditChange(order: List<Int?>): BaseChange {
         val newPages = mutableMapOf<Int, PageAnnotations>()
-        order.forEachIndexed { i, s ->
-            val pa = s?.let { pages[it] } ?: return@forEachIndexed
+        order.forEachIndexed { i, src ->
+            val pa = src?.let { pages[it] } ?: return@forEachIndexed
             newPages[i] = PageAnnotations().also {
                 it.strokes.addAll(pa.strokes)
                 it.texts.addAll(pa.texts)
@@ -731,35 +790,63 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             val i = order.indexOf(b.page)
             if (i >= 0) Bookmark(b.title, i) else null
         }.toMutableList()
+        return BaseChange(
+            transform = { src, out -> PdfAnnotationIO.rebuildPages(src, order, out) },
+            newPages = newPages,
+            newBookmarks = newBookmarks,
+            okMessage = R.string.pages_saved,
+            failMessage = R.string.pages_failed,
+            progressMessage = getString(R.string.applying_pages)
+        )
+    }
 
-        val progress = showProgress(getString(R.string.applying_pages))
+    /** Same pages and ink, only the base document changes (e.g. an OCR text layer). */
+    private fun sameLayoutChange(transform: suspend (File, File) -> Unit, ok: Int, fail: Int, progress: String) =
+        BaseChange(
+            transform = transform,
+            newPages = snapshotPages().toMutableMap(),
+            newBookmarks = snapshotBookmarks().toMutableList(),
+            okMessage = ok,
+            failMessage = fail,
+            progressMessage = progress
+        )
+
+    /**
+     * Applies a change to the document itself (page order, OCR text layer...): builds the new
+     * file, writes ink and bookmarks into [dest], and only then switches the app over,
+     * so a failure leaves everything as it was.
+     */
+    private fun commitBaseChange(change: BaseChange, dest: Uri, openAfter: Boolean) {
+        val src = localCopy ?: return
+        val key = docKey ?: return
+        val progress = showProgress(change.progressMessage)
         applyingPages = true
         lifecycleScope.launch {
             try {
-                runPageEdits(src, key, order, newPages, newBookmarks, dest, openAfter, progress)
+                runBaseChange(src, key, change, dest, openAfter, progress)
             } finally {
                 applyingPages = false
             }
         }
     }
 
-    private suspend fun runPageEdits(
+    private suspend fun runBaseChange(
         src: File,
         key: String,
-        order: List<Int?>,
-        newPages: MutableMap<Int, PageAnnotations>,
-        newBookmarks: MutableList<Bookmark>,
+        change: BaseChange,
         dest: Uri,
         openAfter: Boolean,
         progress: AlertDialog
     ) {
+        val newPages = change.newPages
+        val newBookmarks = change.newBookmarks
         run {
             saveNow()
             pdfJob?.cancel()
             val dir = File(filesDir, "docs").apply { mkdirs() }
             val rebuilt = File(dir, "$key.edit.pdf")
             val result = try {
-                PdfAnnotationIO.rebuildPages(src, order, rebuilt)
+                change.transform(src, rebuilt)
                 PdfAnnotationIO.write(applicationContext, rebuilt, newPages, newBookmarks, dest)
                 true
             } catch (e: Throwable) {
@@ -768,7 +855,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (!result) {
                 progress.dismiss()
                 rebuilt.delete()
-                Toast.makeText(this@MainActivity, R.string.pages_failed, Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, change.failMessage, Toast.LENGTH_LONG).show()
                 return
             }
             if (openAfter) {
@@ -823,13 +910,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             history.clear()
             cropCache.remove(key)
             readingTexts = null
+            clearSearch(resetIndex = true)
 
             val keepPage = currentPage().coerceIn(0, (opened.first.pageCount - 1).coerceAtLeast(0))
             closePanelForce()
             applyView(keepPage)
             setStatus(R.string.saved_in_pdf)
             binding.recycler.post { updatePageIndicator() }
-            Toast.makeText(this@MainActivity, R.string.pages_saved, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, change.okMessage, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1052,6 +1140,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             pdfSavedVersion = 0
 
             readingTexts = null
+            clearSearch(resetIndex = true)
             binding.emptyView.visibility = View.GONE
             applyView(0)
             supportActionBar?.title = name
@@ -1123,6 +1212,277 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (pos < 0) pos = lm.findFirstVisibleItemPosition()
         if (pos < 0) return -1
         return adapter?.firstPageAt(pos)?.takeIf { it >= 0 } ?: pos
+    }
+
+    // ================================================================ search
+
+    private fun openSearch() {
+        if (document == null) return
+        binding.searchBar.visibility = View.VISIBLE
+        updateBackEnabled()
+        binding.searchInput.requestFocus()
+        binding.searchInput.selectAll()
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .showSoftInput(binding.searchInput, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun hideKeyboard() {
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(binding.searchInput.windowToken, 0)
+    }
+
+    private fun closeSearch() {
+        hideKeyboard()
+        searchDebounce?.cancel()
+        binding.searchBar.visibility = View.GONE
+        binding.searchInput.setText("")
+        clearSearch(resetIndex = false)
+        updateBackEnabled()
+    }
+
+    /** Clears highlights; with [resetIndex] also drops the text index (the document changed). */
+    private fun clearSearch(resetIndex: Boolean) {
+        hits = emptyList()
+        hitsByPage = emptyMap()
+        hitIndex = -1
+        if (resetIndex) {
+            searchIndexJob?.cancel()
+            searchIndex = null
+        }
+        binding.searchCount.text = ""
+        refreshHighlights()
+    }
+
+    private fun refreshHighlights() {
+        val a = adapter ?: return
+        a.notifyItemRangeChanged(0, a.itemCount, PageAdapter.SEARCH_PAYLOAD)
+    }
+
+    private fun runSearch(query: String) {
+        val q = query.trim()
+        if (q.isEmpty()) {
+            clearSearch(resetIndex = false)
+            return
+        }
+        val idx = searchIndex
+        if (idx == null) {
+            buildIndexThen { runSearch(binding.searchInput.text.toString()) }
+            return
+        }
+        if (idx.isEmpty) {
+            hits = emptyList()
+            hitsByPage = emptyMap()
+            binding.searchCount.setText(R.string.search_none)
+            Snackbar.make(binding.root, R.string.search_no_text, Snackbar.LENGTH_LONG)
+                .setAction(R.string.ocr) { showOcrDialog() }
+                .show()
+            refreshHighlights()
+            return
+        }
+        hits = idx.find(q)
+        hitsByPage = hits.groupBy { it.page }.mapValues { (_, list) -> list.flatMap { it.rects } }
+        refreshHighlights()
+        if (hits.isEmpty()) {
+            hitIndex = -1
+            binding.searchCount.setText(R.string.search_none)
+            return
+        }
+        // Start from the page being read.
+        val here = currentPage().coerceAtLeast(0)
+        val first = hits.indexOfFirst { it.page >= here }
+        goToHit(if (first >= 0) first else 0)
+    }
+
+    private fun buildIndexThen(after: () -> Unit) {
+        if (searchIndexJob?.isActive == true) return
+        val src = localCopy ?: return
+        searchIndexJob = lifecycleScope.launch {
+            val idx = try {
+                withContext(Dispatchers.IO) {
+                    SearchIndex.build(src) { done, total ->
+                        runOnUiThread {
+                            if (searchIndex == null) {
+                                binding.searchCount.text = getString(R.string.search_indexing, done, total)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                null
+            }
+            if (idx == null) {
+                binding.searchCount.setText(R.string.search_failed)
+                return@launch
+            }
+            searchIndex = idx
+            binding.searchCount.text = ""
+            after()
+        }
+    }
+
+    private fun stepHit(delta: Int) {
+        if (hits.isEmpty()) return
+        goToHit(((hitIndex + delta) % hits.size + hits.size) % hits.size)
+    }
+
+    private fun goToHit(i: Int) {
+        val h = hits.getOrNull(i) ?: return
+        hitIndex = i
+        binding.searchCount.text = getString(R.string.search_count, i + 1, hits.size)
+        refreshHighlights()
+        if (viewSettings.reading) {
+            jumpTo(h.page)
+            return
+        }
+        val a = adapter ?: return
+        val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return
+        lm.scrollToPositionWithOffset(a.positionOf(h.page), 0)
+        // In vertical scrolling, bring the match itself (not just its page) into view.
+        if (!binding.recycler.horizontalPaging) {
+            binding.recycler.post {
+                val v = a.pageViewFor(binding.recycler, h.page) ?: return@post
+                val spread = v.parent as? View ?: return@post
+                val r = h.rects.firstOrNull() ?: return@post
+                val y = spread.top + v.top + v.viewYOf(r.left, r.top)
+                val visible = binding.recycler.height / binding.recycler.scale
+                binding.recycler.scrollBy(0, (y - visible / 3f).toInt())
+                updatePageIndicator()
+            }
+        }
+    }
+
+    private fun showHitList() {
+        if (hits.isEmpty()) return
+        val shown = hits.take(500)
+        val items = shown.map { getString(R.string.search_result_item, it.page + 1, it.snippet) }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.search_results_title, hits.size))
+            .setItems(items) { _, which -> goToHit(which) }
+            .setNegativeButton(R.string.close, null)
+            .show()
+    }
+
+    // ================================================================ OCR (only when the user asks)
+
+    private fun showOcrDialog() {
+        if (document == null || applyingPages) return
+        val page = currentPage().coerceAtLeast(0)
+        val items = arrayOf(
+            getString(R.string.ocr_this_page, page + 1),
+            getString(R.string.ocr_all_pages)
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.ocr_title)
+            .setItems(items) { _, which -> runOcr(if (which == 0) listOf(page) else null) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** OCRs [pagesToRead], or (null) every page without extractable text, then saves a text layer. */
+    private fun runOcr(pagesToRead: List<Int>?) {
+        val doc = document ?: return
+        val src = localCopy ?: return
+        lifecycleScope.launch {
+            val targets = pagesToRead ?: run {
+                setStatus(R.string.ocr_checking)
+                val texts = readingTexts ?: try {
+                    withContext(Dispatchers.IO) { PdfAnnotationIO.extractText(src) }.also { readingTexts = it }
+                } catch (e: Throwable) {
+                    null
+                }
+                setStatus(if (pdfWritable) R.string.saved_in_pdf else R.string.saved_in_app)
+                texts?.let { t -> t.indices.filter { t[it].isBlank() } } ?: (0 until doc.pageCount).toList()
+            }
+            if (targets.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.ocr_all_have_text, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+
+            var cancelled = false
+            var engine: OcrEngine? = null
+            val (dialog, label) = showCancellableProgress(getString(R.string.ocr_starting)) {
+                cancelled = true
+                engine?.stop()
+            }
+            val results = HashMap<Int, List<OcrEngine.Word>>()
+            try {
+                engine = try {
+                    withContext(Dispatchers.Default) { OcrEngine(applicationContext) }
+                } catch (e: Throwable) {
+                    null
+                }
+                val eng = engine
+                if (eng == null) {
+                    Toast.makeText(this@MainActivity, R.string.ocr_init_failed, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+                for ((n, p) in targets.withIndex()) {
+                    if (cancelled) break
+                    label.text = getString(R.string.ocr_progress, p + 1, n + 1, targets.size)
+                    val bmp = doc.renderUncached(p, OCR_WIDTH) ?: continue
+                    val words = withContext(Dispatchers.Default) {
+                        try {
+                            eng.recognize(bmp)
+                        } catch (e: Throwable) {
+                            emptyList()
+                        } finally {
+                            bmp.recycle()
+                        }
+                    }
+                    if (words.isNotEmpty()) results[p] = words
+                }
+            } finally {
+                val e = engine
+                if (e != null) withContext(Dispatchers.Default) { e.close() }
+                dialog.dismiss()
+            }
+            if (results.isEmpty()) {
+                if (!cancelled) Toast.makeText(this@MainActivity, R.string.ocr_nothing_found, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            // Save what was read (even if cancelled part-way).
+            val change = sameLayoutChange(
+                transform = { s, o -> PdfAnnotationIO.addTextLayer(s, results, o) },
+                ok = R.string.ocr_done,
+                fail = R.string.ocr_failed,
+                progress = getString(R.string.ocr_saving)
+            )
+            if (pdfWritable) {
+                commitBaseChange(change, docUri ?: return@launch, openAfter = false)
+            } else {
+                MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle(R.string.read_only_pages_title)
+                    .setMessage(R.string.ocr_read_only_msg)
+                    .setPositiveButton(R.string.save_as_new) { _, _ ->
+                        pendingChange = change
+                        exportEdited.launch(docName.removeSuffix(".pdf") + "-ocr.pdf")
+                    }
+                    .setNegativeButton(R.string.cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    private fun showCancellableProgress(message: String, onCancel: () -> Unit): Pair<AlertDialog, android.widget.TextView> {
+        val pad = (24 * density).toInt()
+        val label = android.widget.TextView(this).apply {
+            text = message
+            textSize = 16f
+            setPadding(pad, 0, 0, 0)
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(pad, pad, pad, pad / 2)
+            addView(ProgressBar(this@MainActivity))
+            addView(label)
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setView(row)
+            .setCancelable(false)
+            .setNegativeButton(R.string.cancel) { _, _ -> onCancel() }
+            .show()
+        return Pair(dialog, label)
     }
 
     // ================================================================ view mode
@@ -1278,6 +1638,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val PREF_COLOR_HINT_SHOWN = "color_hint_shown"
         private const val MAX_HISTORY = 500
         private const val PDF_SAVE_DELAY_MS = 2500L
+        private const val OCR_WIDTH = 2000
         private const val SAMSUNG_PEN_DOWN = 211
         private const val SAMSUNG_PEN_UP = 212
         private const val SAMSUNG_PEN_MOVE = 213

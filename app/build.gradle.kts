@@ -11,8 +11,10 @@ android {
         applicationId = "com.titipong.pdfwriter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
+        // ARM only (all Galaxy tablets/phones): keeps the OCR native libraries out of the APK for other CPUs.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -45,4 +47,5 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.pdfbox.android)
+    implementation(libs.tesseract4android)
 }

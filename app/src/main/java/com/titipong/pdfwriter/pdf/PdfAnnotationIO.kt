@@ -9,6 +9,7 @@ import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
 import com.titipong.pdfwriter.model.TextNote
+import com.titipong.pdfwriter.ocr.OcrEngine
 import com.titipong.pdfwriter.ui.PdfPageView
 import com.tom_roush.pdfbox.cos.COSArray
 import com.tom_roush.pdfbox.cos.COSBase
@@ -26,12 +27,14 @@ import com.tom_roush.pdfbox.pdmodel.font.PDFont
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
+import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.util.Matrix
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +69,7 @@ object PdfAnnotationIO {
     private val PW_COLOR = COSName.getPDFName("PWColor")
     private val PW_SIZE = COSName.getPDFName("PWSize")
     private val PW_BOOKMARK = COSName.getPDFName("PWBookmark")
+    private val PW_OCR = COSName.getPDFName("PWOcr")
     private val PREV = COSName.getPDFName("Prev")
     private val NEXT = COSName.getPDFName("Next")
     private val PARENT = COSName.getPDFName("Parent")
@@ -340,6 +344,57 @@ object PdfAnnotationIO {
                         if (ref != null) blank.rotation = ref.rotation
                         tree.add(blank)
                     }
+                }
+                doc.save(out)
+            }
+        }
+    }
+
+    /**
+     * Writes a copy of [source] with an invisible text layer on the OCR'd pages, so the text can be
+     * searched, selected and copied in any PDF app. The page's look doesn't change. [words] boxes are
+     * normalized to the page as displayed.
+     */
+    suspend fun addTextLayer(source: File, words: Map<Int, List<OcrEngine.Word>>, out: File) = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+                if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
+                val fonts = FontSet(doc)
+                var index = 0
+                for (page in doc.pages) {
+                    val list = words[index]
+                    index++
+                    if (list.isNullOrEmpty()) continue
+                    val geo = PageGeometry.of(page)
+                    if (geo.displayWidth <= 0f) continue
+                    PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
+                        cs.transform(geo.displayUpMatrix())
+                        cs.beginText()
+                        cs.setRenderingMode(RenderingMode.NEITHER) // invisible
+                        for (w in list) {
+                            val runs = fonts.split(w.text)
+                            if (runs.isEmpty()) continue
+                            val boxH = w.box.height() * geo.displayWidth
+                            val boxW = w.box.width() * geo.displayWidth
+                            val size = (boxH * 0.85f).coerceAtLeast(1f)
+                            var natural = 0f
+                            for ((font, str) in runs) {
+                                natural += try { font.getStringWidth(str) / 1000f * size } catch (e: Exception) { 0f }
+                            }
+                            if (natural <= 0f) continue
+                            // Stretch the text so it covers the word's box (for selection / highlights).
+                            cs.setHorizontalScaling((boxW / natural * 100f).coerceIn(10f, 1000f))
+                            val x = geo.upX(w.box.left)
+                            val baseline = geo.upY(w.box.bottom) + boxH * 0.15f
+                            cs.setTextMatrix(Matrix.getTranslateInstance(x, baseline))
+                            for ((font, str) in runs) {
+                                cs.setFont(font, size)
+                                cs.showText(str)
+                            }
+                        }
+                        cs.endText()
+                    }
+                    page.cosObject.setBoolean(PW_OCR, true)
                 }
                 doc.save(out)
             }
