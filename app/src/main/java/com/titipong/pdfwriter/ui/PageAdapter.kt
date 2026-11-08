@@ -18,6 +18,9 @@ class PageAdapter(
         var job: Job? = null
     }
 
+    /** Pages render at (view width x renderScale) so zoomed pages stay sharp. */
+    var renderScale = 1f
+
     override fun getItemCount(): Int = doc.pageCount
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -32,6 +35,11 @@ class PageAdapter(
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.contains(RERENDER_PAYLOAD)) {
+            holder.page.invalidateInk()
+            render(holder, position)
+            return
+        }
         if (payloads.contains(INK_PAYLOAD)) {
             holder.page.invalidateInk()
             return
@@ -45,16 +53,22 @@ class PageAdapter(
         v.pageAspect = doc.aspects[position]
         v.annotations = host.annotationsFor(position)
         v.bitmap = null
+        render(holder, position)
+    }
+
+    /** Keeps the current bitmap on screen until the new one is ready. */
+    private fun render(holder: Holder, position: Int) {
+        val v = holder.page
         holder.job?.cancel()
         holder.job = scope.launch {
             val parentWidth = (v.parent as? View)?.width ?: 0
-            val target = when {
+            val base = when {
                 v.width > 0 -> v.width
                 parentWidth > 0 -> parentWidth
                 else -> v.resources.displayMetrics.widthPixels
             }
             val bmp = try {
-                doc.render(position, target)
+                doc.render(position, (base * renderScale).toInt())
             } catch (e: Exception) {
                 null
             }
@@ -70,5 +84,6 @@ class PageAdapter(
 
     companion object {
         const val INK_PAYLOAD = "ink"
+        const val RERENDER_PAYLOAD = "rerender"
     }
 }

@@ -5,7 +5,7 @@
     <string name="open">เปิด</string>
     <string name="open_failed">เปิดไฟล์นี้ไม่ได้ อาจมีรหัสผ่านหรือไฟล์เสีย</string>
     <string name="empty_title">เปิด PDF เพื่อเริ่มเขียน</string>
-    <string name="empty_body">ใช้นิ้วเลื่อนหน้า ใช้ S Pen เขียน\nกดปุ่มข้างปากกาค้างไว้เพื่อลบ</string>
+    <string name="empty_body">ใช้นิ้วเลื่อนหน้า ถ่างสองนิ้วเพื่อซูม ใช้ S Pen เขียน\nกดปุ่มข้างปากกาค้างไว้เพื่อลบ</string>
     <string name="tool_pen">ปากกา</string>
     <string name="tool_highlight">ไฮไลต์</string>
     <string name="tool_eraser">ยางลบ</string>
@@ -23,6 +23,14 @@
     <string name="clear_page_confirm">ลบรอยเขียนทั้งหมดในหน้า %1$d ใช่ไหม</string>
     <string name="page_of">หน้า %1$d / %2$d</string>
     <string name="saving">กำลังบันทึก…</string>
-    <string name="saved">✓ บันทึกแล้ว</string>
+    <string name="saved_in_pdf">✓ บันทึกในไฟล์ PDF แล้ว</string>
+    <string name="saving_pdf">กำลังบันทึกลง PDF…</string>
+    <string name="saved_in_app">✓ บันทึกในแอปแล้ว</string>
+    <string name="read_only_file">ไฟล์นี้เขียนทับไม่ได้ · ใช้ “บันทึกสำเนา PDF”</string>
     <string name="save_failed">บันทึกไม่สำเร็จ</string>
+    <string name="save_pdf_failed">บันทึกลง PDF ไม่ได้ (รอยเขียนยังอยู่ในแอป)</string>
+    <string name="loading">กำลังเปิด…</string>
+    <string name="export">บันทึกสำเนา PDF…</string>
+    <string name="export_done">บันทึกสำเนา PDF แล้ว</string>
+    <string name="reset_zoom">ขนาดปกติ (ไม่ซูม)</string>
 </resources>

@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.view.Menu
@@ -27,6 +28,7 @@ import com.titipong.pdfwriter.model.DrawTool
 import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.TextNote
+import com.titipong.pdfwriter.pdf.PdfAnnotationIO
 import com.titipong.pdfwriter.pdf.PdfDocumentRenderer
 import com.titipong.pdfwriter.storage.AnnotationStorage
 import com.titipong.pdfwriter.ui.PageAdapter
@@ -36,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.IOException
 
 class MainActivity : AppCompatActivity(), PdfPageView.Host {
@@ -50,15 +53,26 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override val color: Int get() = currentColor
     override val strokeWidth: Float get() = 0.0008f + 0.0012f * sizeLevel
 
+    // Current document
     private var document: PdfDocumentRenderer? = null
     private var adapter: PageAdapter? = null
+    private var docUri: Uri? = null
+    private var docName: String = ""
     private var docKey: String? = null
+    /** Private copy we render from and build saves from, so overwriting the original is safe. */
+    private var localCopy: File? = null
+    /** True when the ink can be written into the original PDF file. */
+    private var pdfWritable = false
     private var pages: MutableMap<Int, PageAnnotations> = mutableMapOf()
     private val history = ArrayDeque<Pair<Int, Any>>()
 
+    // Saving: an in-app copy right away, the PDF file itself a moment later.
     private var dirty = false
     private var saveSeq = 0L
     private var saveJob: Job? = null
+    private var changeVersion = 0L
+    private var pdfSavedVersion = 0L
+    private var pdfJob: Job? = null
 
     private val toolButtons = mutableMapOf<DrawTool, View>()
     private val colorViews = mutableListOf<View>()
@@ -66,10 +80,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private val prefs by lazy { getSharedPreferences("pdfwriter", MODE_PRIVATE) }
 
     private val pickPdf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val persisted = persistPermission(uri)
-            openPdf(uri, remember = persisted, silent = false)
-        }
+        if (uri != null) openPdf(uri, remember = persistPermission(uri), silent = false)
+    }
+
+    private val exportPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) exportCopy(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,6 +101,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 updatePageIndicator()
             }
         })
+        binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
         binding.btnOpenEmpty.setOnClickListener { launchPicker() }
 
         setupTools()
@@ -109,7 +125,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun onPause() {
         super.onPause()
-        saveNow() // so closing / swiping away the app never loses ink
+        saveNow()      // instant in-app copy
+        writePdfNow()  // and into the PDF file, even if the app is being closed
     }
 
     override fun onDestroy() {
@@ -121,7 +138,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     /**
      * Some Samsung devices report "S Pen side button held" as legacy action codes
      * 211/212/213 instead of ACTION_DOWN/UP/MOVE + BUTTON_STYLUS_PRIMARY.
-     * Translate them so the normal pipeline handles them, flagged as eraser.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val mapped = when (ev.actionMasked) {
@@ -150,6 +166,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
         R.id.action_open -> {
             launchPicker()
+            true
+        }
+        R.id.action_export -> {
+            if (document != null) exportPdf.launch(docName.removeSuffix(".pdf") + "-annotated.pdf")
+            true
+        }
+        R.id.action_reset_zoom -> {
+            binding.recycler.resetZoom()
             true
         }
         R.id.action_clear -> {
@@ -212,6 +236,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 else setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
             }
         }
+    }
+
+    private fun onZoomSettled(scale: Float) {
+        val a = adapter ?: return
+        a.renderScale = scale
+        val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return
+        val first = lm.findFirstVisibleItemPosition()
+        val last = lm.findLastVisibleItemPosition()
+        if (first >= 0 && last >= first) a.notifyItemRangeChanged(first, last - first + 1, PageAdapter.RERENDER_PAYLOAD)
     }
 
     // ---------------------------------------------------------------- Host
@@ -297,37 +330,109 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     // ---------------------------------------------------------------- saving
 
+    private fun setStatus(resId: Int) {
+        if (!isDestroyed) binding.tvSaveState.setText(resId)
+    }
+
     private fun markDirty() {
         dirty = true
-        binding.tvSaveState.setText(R.string.saving)
+        changeVersion++
+        setStatus(R.string.saving)
         saveJob?.cancel()
         saveJob = lifecycleScope.launch {
             delay(400)
             val key = docKey ?: return@launch
-            val json = AnnotationStorage.toJson(pages)
+            val json = AnnotationStorage.toJson(pages, synced = false)
             val seq = ++saveSeq
             dirty = false
             try {
                 withContext(Dispatchers.IO) { AnnotationStorage.save(applicationContext, key, json, seq) }
-                if (!dirty) binding.tvSaveState.setText(R.string.saved)
+                if (!pdfWritable) setStatus(R.string.saved_in_app)
             } catch (e: Exception) {
                 dirty = true
-                binding.tvSaveState.setText(R.string.save_failed)
+                setStatus(R.string.save_failed)
+            }
+        }
+        if (pdfWritable) {
+            pdfJob?.cancel()
+            pdfJob = lifecycleScope.launch {
+                delay(PDF_SAVE_DELAY_MS)
+                writePdfNow()
             }
         }
     }
 
-    /** Synchronous save, used when leaving the screen or switching files. */
+    /** Synchronous in-app save, used when leaving the screen or switching files. */
     private fun saveNow() {
         saveJob?.cancel()
         if (!dirty) return
         val key = docKey ?: return
         try {
-            AnnotationStorage.save(applicationContext, key, AnnotationStorage.toJson(pages), ++saveSeq)
+            AnnotationStorage.save(applicationContext, key, AnnotationStorage.toJson(pages, synced = false), ++saveSeq)
             dirty = false
-            binding.tvSaveState.setText(R.string.saved)
         } catch (e: Exception) {
-            binding.tvSaveState.setText(R.string.save_failed)
+            setStatus(R.string.save_failed)
+        }
+    }
+
+    private fun snapshot(): Map<Int, PageAnnotations> = pages.mapValues { (_, pa) ->
+        PageAnnotations().also {
+            it.strokes.addAll(pa.strokes)
+            it.texts.addAll(pa.texts)
+        }
+    }
+
+    /** Writes the ink into the original PDF in the background; survives leaving the app. */
+    private fun writePdfNow() {
+        pdfJob?.cancel()
+        if (!pdfWritable) return
+        val version = changeVersion
+        if (version == pdfSavedVersion) return
+        val src = localCopy ?: return
+        val dest = docUri ?: return
+        val key = docKey ?: return
+        val snap = snapshot()
+        pdfSavedVersion = version // claim it; reset below if the write fails
+        setStatus(R.string.saving_pdf)
+        App.scope.launch {
+            val ok = try {
+                PdfAnnotationIO.write(applicationContext, src, snap, dest)
+                true
+            } catch (e: Throwable) {
+                false
+            }
+            if (!ok) {
+                if (pdfSavedVersion == version) pdfSavedVersion = -1
+                setStatus(R.string.save_pdf_failed)
+                return@launch
+            }
+            // Nothing changed meanwhile: mark the in-app copy as matching the file.
+            if (changeVersion == version && docKey == key) {
+                val json = AnnotationStorage.toJson(snap, synced = true)
+                val seq = ++saveSeq
+                withContext(Dispatchers.IO) {
+                    try { AnnotationStorage.save(applicationContext, key, json, seq) } catch (e: Exception) { }
+                }
+                setStatus(R.string.saved_in_pdf)
+            }
+        }
+    }
+
+    private fun exportCopy(dest: Uri) {
+        val src = localCopy ?: return
+        val snap = snapshot()
+        App.scope.launch {
+            val ok = try {
+                PdfAnnotationIO.write(applicationContext, src, snap, dest)
+                true
+            } catch (e: Throwable) {
+                false
+            }
+            Toast.makeText(
+                applicationContext,
+                if (ok) R.string.export_done else R.string.save_pdf_failed,
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -337,39 +442,58 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         pickPdf.launch(arrayOf("application/pdf"))
     }
 
-    private fun persistPermission(uri: Uri): Boolean = try {
-        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private fun persistPermission(uri: Uri): Boolean {
+        val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        return try {
+            contentResolver.takePersistableUriPermission(uri, rw)
+            true
+        } catch (e: Exception) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                true
+            } catch (e2: Exception) {
+                false
+            }
+        }
+    }
+
+    private fun canWrite(uri: Uri): Boolean = try {
+        contentResolver.openFileDescriptor(uri, "rw")?.close()
         true
     } catch (e: Exception) {
         false
     }
 
-    private fun queryMeta(uri: Uri): Pair<String, Long> {
+    private fun queryName(uri: Uri): String {
         var name: String? = null
-        var size = 0L
         try {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
-                ?.use { c ->
-                    if (c.moveToFirst()) {
-                        if (!c.isNull(0)) name = c.getString(0)
-                        if (!c.isNull(1)) size = c.getLong(1)
-                    }
-                }
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) name = c.getString(0)
+            }
         } catch (e: Exception) {
         }
-        return Pair(name ?: uri.lastPathSegment ?: "document.pdf", size)
+        return name ?: uri.lastPathSegment ?: "document.pdf"
     }
+
+    private class Opened(
+        val doc: PdfDocumentRenderer,
+        val copy: File,
+        val pages: MutableMap<Int, PageAnnotations>,
+        val writable: Boolean,
+        val needsPdfWrite: Boolean
+    )
 
     private fun openPdf(uri: Uri, remember: Boolean, silent: Boolean) {
         lifecycleScope.launch {
             saveNow()
-            val meta = queryMeta(uri)
-            val newDoc = try {
-                withContext(Dispatchers.IO) {
-                    val pfd = contentResolver.openFileDescriptor(uri, "r") ?: throw IOException("Cannot open")
-                    PdfDocumentRenderer.open(pfd)
-                }
+            writePdfNow()
+            setStatus(R.string.loading)
+            val name = queryName(uri)
+            val key = AnnotationStorage.keyFor(uri.toString())
+            val opened = try {
+                withContext(Dispatchers.IO) { loadDocument(uri, key) }
             } catch (e: Exception) {
+                binding.tvSaveState.text = ""
                 if (silent) {
                     prefs.edit().remove(PREF_LAST_URI).apply()
                 } else {
@@ -378,26 +502,68 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 return@launch
             }
 
-            val key = AnnotationStorage.keyFor(meta.first, meta.second)
-            val loaded = withContext(Dispatchers.IO) { AnnotationStorage.load(applicationContext, key) }
-
             document?.close()
-            document = newDoc
+            document = opened.doc
+            docUri = uri
+            docName = name
             docKey = key
-            pages = loaded
+            localCopy = opened.copy
+            pdfWritable = opened.writable
+            pages = opened.pages
             history.clear()
             dirty = false
+            changeVersion = 0
+            pdfSavedVersion = 0
 
-            val a = PageAdapter(newDoc, this@MainActivity, lifecycleScope)
+            binding.recycler.resetZoom()
+            val a = PageAdapter(opened.doc, this@MainActivity, lifecycleScope)
             adapter = a
             binding.recycler.adapter = a
             binding.emptyView.visibility = View.GONE
-            supportActionBar?.title = meta.first
-            binding.tvSaveState.text = ""
+            supportActionBar?.title = name
+            setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
             binding.recycler.post { updatePageIndicator() }
-
             if (remember) prefs.edit().putString(PREF_LAST_URI, uri.toString()).apply()
+
+            // Ink saved in the app but not yet in the file (e.g. the app was killed mid-save): write it now.
+            if (opened.needsPdfWrite && opened.writable) {
+                changeVersion = 1
+                writePdfNow()
+            }
         }
+    }
+
+    /** Runs on IO: copies the file privately, opens the renderer, and loads the ink layer. */
+    private suspend fun loadDocument(uri: Uri, key: String): Opened {
+        val dir = File(filesDir, "docs").apply { mkdirs() }
+        val copy = File(dir, "$key.pdf")
+        val tmp = File(dir, "$key.tmp")
+        val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open")
+        input.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+        if (!tmp.renameTo(copy)) {
+            copy.delete()
+            tmp.renameTo(copy)
+        }
+        // Keep only this copy and the previous one (a save for it may still be running).
+        val previous = localCopy?.name
+        dir.listFiles()?.forEach { if (it.name != copy.name && it.name != previous) it.delete() }
+
+        val doc = PdfDocumentRenderer.open(ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY))
+        val writable = canWrite(uri)
+        val side = AnnotationStorage.load(applicationContext, key)
+
+        // The PDF file is the source of truth (it may have been edited in another app),
+        // unless the app holds newer ink that never made it into the file.
+        if (side != null && (!side.synced || !writable)) {
+            return Opened(doc, copy, side.pages, writable, needsPdfWrite = !side.synced)
+        }
+        val fromPdf = try {
+            PdfAnnotationIO.read(copy)
+        } catch (e: Throwable) {
+            // The PDF library can't read this file: keep ink in the app only, never touch the file.
+            return Opened(doc, copy, side?.pages ?: mutableMapOf(), writable = false, needsPdfWrite = false)
+        }
+        return Opened(doc, copy, fromPdf, writable, needsPdfWrite = false)
     }
 
     private fun currentPage(): Int {
@@ -415,6 +581,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     companion object {
         private const val PREF_LAST_URI = "last_uri"
         private const val MAX_HISTORY = 500
+        private const val PDF_SAVE_DELAY_MS = 2500L
         private const val SAMSUNG_PEN_DOWN = 211
         private const val SAMSUNG_PEN_UP = 212
         private const val SAMSUNG_PEN_MOVE = 213

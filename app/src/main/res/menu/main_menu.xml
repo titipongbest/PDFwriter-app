@@ -6,6 +6,14 @@
         android:title="@string/open"
         app:showAsAction="always" />
     <item
+        android:id="@+id/action_export"
+        android:title="@string/export"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_reset_zoom"
+        android:title="@string/reset_zoom"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_clear"
         android:title="@string/clear_page"
         app:showAsAction="never" />

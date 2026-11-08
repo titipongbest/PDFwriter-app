@@ -62,7 +62,7 @@ class PdfDocumentRenderer private constructor(
     }
 
     companion object {
-        private const val MAX_WIDTH = 2000
+        private const val MAX_WIDTH = 2800
 
         suspend fun open(pfd: ParcelFileDescriptor): PdfDocumentRenderer {
             val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()

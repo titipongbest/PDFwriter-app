@@ -14,7 +14,14 @@ object AnnotationStorage {
 
     private val lastWritten = HashMap<String, Long>()
 
-    fun keyFor(name: String, size: Long): String = "${name}_$size"
+    /** Stable per-document key (the URI), hashed so it is a safe file name. */
+    fun keyFor(uri: String): String {
+        val md = java.security.MessageDigest.getInstance("SHA-1")
+        return md.digest(uri.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    /** synced = true when the same ink is already written into the PDF file itself. */
+    class Loaded(val pages: MutableMap<Int, PageAnnotations>, val synced: Boolean)
 
     private fun fileFor(context: Context, key: String): File {
         val dir = File(context.filesDir, "annotations")
@@ -25,7 +32,7 @@ object AnnotationStorage {
 
     private fun r(v: Float, scale: Double): Double = Math.round(v * scale) / scale
 
-    fun toJson(pages: Map<Int, PageAnnotations>): String {
+    fun toJson(pages: Map<Int, PageAnnotations>, synced: Boolean): String {
         val pagesJson = JSONObject()
         for ((index, page) in pages) {
             if (page.isEmpty()) continue
@@ -60,7 +67,8 @@ object AnnotationStorage {
             pagesJson.put(index.toString(), po)
         }
         val root = JSONObject()
-        root.put("v", 1)
+        root.put("v", 2)
+        root.put("synced", synced)
         root.put("pages", pagesJson)
         return root.toString()
     }
@@ -80,12 +88,15 @@ object AnnotationStorage {
         lastWritten[key] = seq
     }
 
-    fun load(context: Context, key: String): MutableMap<Int, PageAnnotations> {
+    fun load(context: Context, key: String): Loaded? {
         val result = mutableMapOf<Int, PageAnnotations>()
         val file = fileFor(context, key)
-        if (!file.exists()) return result
+        if (!file.exists()) return null
+        var synced = false
         try {
-            val pagesJson = JSONObject(file.readText()).getJSONObject("pages")
+            val root = JSONObject(file.readText())
+            synced = root.optBoolean("synced", false)
+            val pagesJson = root.getJSONObject("pages")
             val keys = pagesJson.keys()
             while (keys.hasNext()) {
                 val k = keys.next()
@@ -127,8 +138,8 @@ object AnnotationStorage {
                 result[k.toInt()] = page
             }
         } catch (e: Exception) {
-            // Corrupt file: start fresh rather than crash.
+            return null // corrupt file: fall back to the PDF's own annotations
         }
-        return result
+        return Loaded(result, synced)
     }
 }

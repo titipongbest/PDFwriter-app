@@ -122,8 +122,14 @@ class PdfPageView(context: Context) : View(context) {
         }
         val a = annotations
         if (a != null && !a.isEmpty()) {
-            ensureInkCache(a)
-            val cache = inkCache
+            // Zoomed in: draw ink as vectors so it stays sharp. At 1x a bitmap cache keeps it fast.
+            val zoomed = ((parent as? ZoomRecyclerView)?.scale ?: 1f) > 1.01f
+            val cache = if (zoomed) {
+                null
+            } else {
+                ensureInkCache(a)
+                inkCache
+            }
             if (cache != null) canvas.drawBitmap(cache, 0f, 0f, null) else renderAnnotations(canvas, a, w)
         }
         active?.let { drawStroke(canvas, it, w) }
