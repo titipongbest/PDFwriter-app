@@ -58,11 +58,17 @@ class OcrEngine(context: Context) : Closeable {
     companion object {
         private const val LANGUAGES = "tha+eng"
         private val FILES = listOf("tha.traineddata", "eng.traineddata")
+        /** Change when the bundled models change, so devices replace their copied files. */
+        private const val MODEL_SET = "tessdata_best-1"
 
         /** Tesseract needs real files: copy the bundled language data out of the APK once. */
         fun ensureData(context: Context): File {
             val root = File(context.filesDir, "tess")
             val dir = File(root, "tessdata").apply { mkdirs() }
+            val stamp = File(dir, "models.txt")
+            if (!stamp.exists() || stamp.readText() != MODEL_SET) {
+                FILES.forEach { File(dir, it).delete() }
+            }
             for (name in FILES) {
                 val target = File(dir, name)
                 if (target.exists() && target.length() > 0) continue
@@ -72,6 +78,7 @@ class OcrEngine(context: Context) : Closeable {
                 }
                 tmp.renameTo(target)
             }
+            stamp.writeText(MODEL_SET)
             return root
         }
     }

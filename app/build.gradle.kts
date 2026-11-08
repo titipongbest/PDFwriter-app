@@ -11,8 +11,8 @@ android {
         applicationId = "com.titipong.pdfwriter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 41
-        versionName = "4.9"
+        versionCode = 42
+        versionName = "5.1"
         // ARM only (all Galaxy tablets/phones): keeps the OCR native libraries out of the APK for other CPUs.
         // -PallAbis (timing test on an x86 emulator) keeps every CPU type.
         if (!project.hasProperty("allAbis")) ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
@@ -53,6 +53,27 @@ android {
         jvmTarget = "17"
     }
 }
+
+// OCR language data: Tesseract "best" models (most accurate) for Thai + English, downloaded at build
+// time (about 30 MB, so not kept in the repository).
+val tessdataDir = file("src/main/assets/tessdata")
+val fetchTessdata by tasks.registering {
+    val langs = listOf("tha", "eng")
+    outputs.files(langs.map { File(tessdataDir, "$it.traineddata") })
+    doLast {
+        tessdataDir.mkdirs()
+        for (l in langs) {
+            val f = File(tessdataDir, "$l.traineddata")
+            if (f.exists() && f.length() > 0) continue
+            val tmp = File(tessdataDir, "$l.tmp")
+            java.net.URL("https://github.com/tesseract-ocr/tessdata_best/raw/main/$l.traineddata")
+                .openStream().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+            check(tmp.length() > 1_000_000) { "Downloading $l.traineddata failed" }
+            tmp.renameTo(f)
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(fetchTessdata) }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
