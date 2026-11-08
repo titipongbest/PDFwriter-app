@@ -699,6 +699,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     override fun requestText(page: Int, x: Float, y: Float) {
+        clearSelection()
         promptText(getString(R.string.add_text), "") { text ->
             val note = TextNote(text, x, y, color, 0.018f + 0.004f * sizeValue)
             annotationsFor(page).texts.add(note)
@@ -735,6 +736,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // ================================================================ editing
 
     private fun undoLast() {
+        clearSelection()
         while (history.isNotEmpty()) {
             val (page, item) = history.removeLast()
             val pa = pages[page] ?: continue
@@ -742,6 +744,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 is InkStroke -> pa.strokes.remove(item)
                 is TextNote -> pa.texts.remove(item)
                 is TextHighlight -> pa.highlights.remove(item)
+                is NoteEdit -> {
+                    val i = pa.texts.indexOf(item.after)
+                    if (i >= 0) pa.texts[i] = item.before
+                    i >= 0
+                }
                 else -> false
             }
             if (removed) {
@@ -2176,6 +2183,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {
         clearSelection()
         tappedNote = page to note
+        noteView = view
+        view.editingNote = note // dotted frame: drag to move, corners to resize
         binding.btnSelCopy.visibility = View.GONE
         binding.btnSelHighlight.visibility = View.GONE
         binding.btnSelUnderline.visibility = View.GONE
@@ -2277,7 +2286,28 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         selView?.selectionRects = idx.rangeRects(selPage, a, b)
     }
 
+    override fun onNoteDeselect() = clearSelection()
+
+    override fun onNoteDragStart() {
+        barAnchor = null
+        binding.selectionBar.visibility = View.GONE
+    }
+
+    override fun onNoteChanged(view: PdfPageView, page: Int, before: TextNote, after: TextNote) {
+        history.addLast(page to NoteEdit(before, after))
+        if (history.size > MAX_HISTORY) history.removeFirst()
+        markDirty()
+        onTextTapped(view, page, after) // keep it selected, menu above its new place
+    }
+
+    /** Undo record for a text note that was moved / resized / edited. */
+    private class NoteEdit(val before: TextNote, val after: TextNote)
+
+    private var noteView: PdfPageView? = null
+
     private fun clearSelection() {
+        noteView?.editingNote = null
+        noteView = null
         selView?.selectionRects = null
         selView = null
         selPage = -1
@@ -2400,7 +2430,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 val list = pages[page]?.texts ?: return@setPositiveButton
                 val i = list.indexOf(note)
                 if (i < 0 || text.isEmpty()) return@setPositiveButton
-                list[i] = TextNote(text, note.x, note.y, color, sizeOf(tenths))
+                val edited = TextNote(text, note.x, note.y, color, sizeOf(tenths))
+                list[i] = edited
+                history.addLast(page to NoteEdit(note, edited))
                 adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
                 markDirty()
             }

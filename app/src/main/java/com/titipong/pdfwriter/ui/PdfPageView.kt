@@ -42,6 +42,11 @@ class PdfPageView(context: Context) : View(context) {
         val toolActive: Boolean get() = true
         /** A tap on an existing text note with the text tool. */
         fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {}
+        /** The selected text note is being dragged (hide popups), and was moved / resized. */
+        fun onNoteDragStart() {}
+        /** A tap away from the selected note: unselect it (instead of adding a new note). */
+        fun onNoteDeselect() {}
+        fun onNoteChanged(view: PdfPageView, page: Int, before: TextNote, after: TextNote) {}
         /** Settings: smooth pen strokes; straighten free-highlighter strokes. */
         val inkSmoothing: Boolean get() = false
         val highlighterStraighten: Boolean get() = false
@@ -143,6 +148,27 @@ class PdfPageView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** The text note shown with a dotted frame and corner handles (drag to move / resize). */
+    var editingNote: TextNote? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+    private val frameDash = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(37, 99, 235)
+        strokeWidth = 1.5f * resources.displayMetrics.density
+        pathEffect = android.graphics.DashPathEffect(
+            floatArrayOf(5f * resources.displayMetrics.density, 4f * resources.displayMetrics.density), 0f
+        )
+    }
+    private val handleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val handleStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(37, 99, 235)
+        strokeWidth = 1.5f * resources.displayMetrics.density
+    }
+
     /** Current text selection (view mode), normalized line boxes. */
     var selectionRects: List<RectF>? = null
         set(value) {
@@ -227,6 +253,7 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     fun release() {
+        editingNote = null
         inkCache?.recycle()
         inkCache = null
         inkDirty = true
@@ -348,6 +375,15 @@ class PdfPageView(context: Context) : View(context) {
             }
         }
         selectionRects?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, selectionPaint) }
+        editingNote?.let { n ->
+            val f = noteFrame(n)
+            canvas.drawRect(f.left * s, f.top * s, f.right * s, f.bottom * s, frameDash)
+            val hs = 5f * density
+            for ((cx, cy) in corners(f)) {
+                canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleFill)
+                canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleStroke)
+            }
+        }
         hits?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, hitPaint) }
         activeHits?.forEach { r ->
             val pad = 2f * density
@@ -490,6 +526,7 @@ class PdfPageView(context: Context) : View(context) {
 
         // No tool selected: the pen scrolls the page like a finger (unless the side button is held).
         if (!h.toolActive && !eraserButton && mode == Mode.NONE) return false
+        if (!eraserButton && h.tool == DrawTool.TEXT && noteDrag(e, h)) return true
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -536,6 +573,7 @@ class PdfPageView(context: Context) : View(context) {
 
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
         if (h.tool != DrawTool.TEXT || !h.toolActive) return false // let the list scroll
+        if (noteDrag(e, h)) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 fingerDownX = e.x
@@ -553,9 +591,126 @@ class PdfPageView(context: Context) : View(context) {
 
     override fun performClick(): Boolean = super.performClick()
 
+    // ---------------------------------------------------------------- moving / resizing a text note
+
+    /** 0 = none, 1 = move, 2..5 = resize from corner (top-left, top-right, bottom-right, bottom-left). */
+    private var dragKind = 0
+    private var dragStartX = 0f
+    private var dragStartY = 0f
+    private var dragOriginal: TextNote? = null
+    private var dragMoved = false
+
+    private fun noteFrame(n: TextNote): RectF {
+        val b = textBox(n)
+        val pad = 4f * density / pageScale.coerceAtLeast(1f)
+        return RectF(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad)
+    }
+
+    private fun corners(f: RectF) = listOf(f.left to f.top, f.right to f.top, f.right to f.bottom, f.left to f.bottom)
+
+    /**
+     * Drag on the selected note's frame: inside moves it, a corner handle resizes it (the opposite
+     * corner stays put). Returns false when the touch isn't on the frame (normal text-tool handling).
+     */
+    private fun noteDrag(e: MotionEvent, h: Host): Boolean {
+        val note = editingNote
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                dragKind = 0
+                if (note == null || !toNormalized(e.x, e.y)) return false
+                val x = pt[0]
+                val y = pt[1]
+                val f = noteFrame(note)
+                val grab = 18f * density / pageScale.coerceAtLeast(1f)
+                val corner = corners(f).indexOfFirst { (cx, cy) -> hypot(cx - x, cy - y) < grab }
+                dragKind = when {
+                    corner >= 0 -> 2 + corner
+                    RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y) -> 1
+                    else -> 0
+                }
+                if (dragKind == 0) return false
+                dragStartX = x
+                dragStartY = y
+                dragOriginal = note
+                dragMoved = false
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (dragKind == 0) return false
+                val orig = dragOriginal ?: return true
+                if (!toNormalized(e.x, e.y)) return true
+                val dx = pt[0] - dragStartX
+                val dy = pt[1] - dragStartY
+                if (!dragMoved && hypot(dx, dy) * pageScale < touchSlop) return true
+                if (!dragMoved) {
+                    dragMoved = true
+                    h.onNoteDragStart()
+                }
+                val updated = if (dragKind == 1) {
+                    TextNote(orig.text, orig.x + dx, orig.y + dy, orig.color, orig.size)
+                } else {
+                    resized(orig, dragKind - 2, pt[0], pt[1])
+                }
+                replaceNote(editingNote ?: return true, updated)
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (dragKind == 0) return false
+                val orig = dragOriginal
+                val now = editingNote
+                dragKind = 0
+                parent?.requestDisallowInterceptTouchEvent(false)
+                if (dragMoved && orig != null && now != null && now !== orig) {
+                    h.onNoteChanged(this, pageIndex, orig, now)
+                } else if (!dragMoved && now != null) {
+                    performClick()
+                    h.onTextTapped(this, pageIndex, now) // a tap: show its menu again
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                if (dragKind == 0) return false
+                dragKind = 0
+                return true
+            }
+        }
+        return dragKind != 0
+    }
+
+    /** [orig] scaled so its frame's corner [corner] follows (x, y) while the opposite corner stays. */
+    private fun resized(orig: TextNote, corner: Int, x: Float, y: Float): TextNote {
+        val f = noteFrame(orig)
+        val c = corners(f)
+        val (ax, ay) = c[(corner + 2) % 4] // the fixed, opposite corner
+        val scale = maxOf(
+            kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f),
+            kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)
+        ).coerceIn(0.2f, 8f)
+        val size = (orig.size * scale).coerceIn(0.006f, 0.4f)
+        val trial = TextNote(orig.text, orig.x, orig.y, orig.color, size)
+        val nf = noteFrame(trial)
+        val (tx, ty) = corners(nf)[(corner + 2) % 4]
+        return TextNote(orig.text, orig.x + (ax - tx), orig.y + (ay - ty), orig.color, size)
+    }
+
+    private fun replaceNote(old: TextNote, new: TextNote) {
+        val list = annotations?.texts ?: return
+        val i = list.indexOf(old)
+        if (i < 0) return
+        list[i] = new
+        editingNote = new
+        inkDirty = true
+        invalidate()
+    }
+
     /** Text tool tap: on an existing note -> offer to delete it; elsewhere -> add a note. */
     private fun textTap(h: Host, nx: Float, ny: Float) {
         val hit = textAt(nx, ny)
+        if (hit == null && editingNote != null) {
+            h.onNoteDeselect()
+            return
+        }
         if (hit != null) h.onTextTapped(this, pageIndex, hit) else h.requestText(pageIndex, nx, ny)
     }
 
