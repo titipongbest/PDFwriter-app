@@ -261,7 +261,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         viewSettings = ViewSettings.load(prefs)
 
         binding.recycler.layoutManager = LinearLayoutManager(this)
-        binding.recycler.setItemViewCacheSize(2)
+        binding.recycler.setItemViewCacheSize(4)
         binding.recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 updatePageIndicator()
@@ -1147,7 +1147,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                         finalCopy.delete()
                         rebuilt.renameTo(finalCopy)
                     }
-                    val doc = PdfDocumentRenderer.open(ParcelFileDescriptor.open(finalCopy, ParcelFileDescriptor.MODE_READ_ONLY))
+                    val doc = PdfDocumentRenderer.open(
+                        ParcelFileDescriptor.open(finalCopy, ParcelFileDescriptor.MODE_READ_ONLY),
+                        PdfDocumentRenderer.diskCacheFor(cacheDir, finalCopy)
+                    )
                     val toc = try { PdfAnnotationIO.read(finalCopy).outline } catch (e: Throwable) { emptyList() }
                     Pair(doc, toc)
                 }
@@ -1739,7 +1742,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Keep the copies of open tabs (and one whose save may still be running).
         dir.listFiles()?.forEach { if (it.name != copy.name && it.name !in keepFiles) it.delete() }
 
-        val doc = PdfDocumentRenderer.open(ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY))
+        val doc = PdfDocumentRenderer.open(
+            ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
+            PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
+        )
         val writable = canWrite(uri)
 
         if (fast && side != null) {

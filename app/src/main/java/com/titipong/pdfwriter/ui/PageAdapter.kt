@@ -120,7 +120,8 @@ class PageAdapter(
             v.bookmarked = host.isBookmarked(page)
             v.hits = host.searchHits(page)
             v.activeHits = host.activeSearchHit(page)
-            v.bitmap = null
+            // Show what's already loaded right away (no blank page), then sharpen.
+            v.bitmap = doc.peek(page)
             render(holder, i, page)
         }
     }
