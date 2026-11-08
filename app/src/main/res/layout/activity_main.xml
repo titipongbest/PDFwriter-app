@@ -144,6 +144,29 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal" />
 
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/eraserModeGroup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnEraseStroke"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/erase_stroke" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnErasePixel"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/erase_pixel" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
             <View style="@style/ToolDivider" />
 
             <TextView

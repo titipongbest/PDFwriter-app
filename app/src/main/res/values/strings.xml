@@ -176,4 +176,7 @@
     <string name="edit">Edit</string>
     <string name="edit_text_title">Edit text</string>
     <string name="text_size_value">Size %1$s</string>
+    <string name="erase_stroke">Stroke</string>
+    <string name="erase_pixel">Pixel</string>
+    <string name="already_open">Already open</string>
 </resources>

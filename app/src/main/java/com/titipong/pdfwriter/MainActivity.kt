@@ -108,6 +108,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     /** Tapping the selected tool again puts it away (no tool: the S Pen scrolls). */
     private var toolOn = true
     override val toolActive: Boolean get() = toolOn
+    private var eraserPixel = false
+    override val eraserPixelMode: Boolean get() = eraserPixel
     private var tappedNote: Pair<Int, TextNote>? = null
     override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
     override val strokeWidth: Float get() = widthFor(sizeTenths)
@@ -508,6 +510,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSizePlus.setOnClickListener { stepSize(+1) }
         binding.tvSize.setOnClickListener { promptSize() }
         binding.btnViewUndo.setOnClickListener { undoLast() }
+        eraserPixel = prefs.getBoolean(PREF_ERASER_PIXEL, false)
+        binding.eraserModeGroup.check(if (eraserPixel) R.id.btnErasePixel else R.id.btnEraseStroke)
+        binding.eraserModeGroup.addOnButtonCheckedListener { _, id, checked ->
+            if (checked) {
+                eraserPixel = id == R.id.btnErasePixel
+                prefs.edit().putBoolean(PREF_ERASER_PIXEL, eraserPixel).apply()
+            }
+        }
 
         val wasOn = prefs.getBoolean(PREF_TOOL_ON, true)
         selectTool(currentTool)
@@ -568,6 +578,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons.forEach { (key, v) -> v.isSelected = key == t }
         val hasColors = palette.isNotEmpty()
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
+        binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         if (hasColors) selectColor(colorIndex)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
@@ -1112,7 +1123,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 // The file itself was saved fine; reopen it from scratch.
                 closePanelForce()
                 applyingPages = false
-                openPdf(dest, remember = true, silent = false)
+                openPdf(dest, remember = true, silent = false, force = true)
                 return
             }
             document?.close()
@@ -1470,8 +1481,26 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val hadSidecar: Boolean = true
     )
 
-    private fun openPdf(uri: Uri, remember: Boolean, silent: Boolean) {
+    private fun openPdf(uri: Uri, remember: Boolean, silent: Boolean, force: Boolean = false) {
+        // Already the open document: nothing to load.
+        if (!force && document != null && uri.toString() == docUri?.toString()) {
+            refreshTabs()
+            return
+        }
         lifecycleScope.launch {
+            // The same file reached through a different link (e.g. Recent vs. My Files): go to its tab.
+            val newName = queryName(uri)
+            val twin = if (force) null else tabs.firstOrNull { it.uri != uri.toString() && it.name == newName }
+                ?.takeIf { withContext(Dispatchers.IO) { sameFile(uri, Uri.parse(it.uri)) } }
+            if (twin != null) {
+                if (twin.uri == docUri?.toString()) {
+                    refreshTabs()
+                    Toast.makeText(this@MainActivity, R.string.already_open, Toast.LENGTH_SHORT).show()
+                } else {
+                    openPdf(Uri.parse(twin.uri), remember = true, silent = false)
+                }
+                return@launch
+            }
             saveNow()
             writePdfNow()
             setStatus(R.string.loading)
@@ -1542,6 +1571,36 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 writePdfNow()
             }
         }
+    }
+
+    /**
+     * Whether two links point at the same file: same size, and the same first and last 64 KB.
+     * (Different apps hand out different links for one file.)
+     */
+    private fun sameFile(a: Uri, b: Uri): Boolean = try {
+        fun fingerprint(u: Uri): Pair<Long, Int>? {
+            contentResolver.openFileDescriptor(u, "r")?.use { pfd ->
+                val size = pfd.statSize
+                java.io.FileInputStream(pfd.fileDescriptor).use { input ->
+                    val ch = input.channel
+                    val md = java.security.MessageDigest.getInstance("SHA-1")
+                    val chunk = 64 * 1024
+                    val buf = java.nio.ByteBuffer.allocate(chunk)
+                    for (pos in listOf(0L, maxOf(0L, size - chunk))) {
+                        buf.clear()
+                        ch.position(pos)
+                        while (buf.hasRemaining() && ch.read(buf) > 0) { }
+                        md.update(buf.array(), 0, buf.position())
+                    }
+                    return size to md.digest().contentHashCode()
+                }
+            }
+            return null
+        }
+        val fa = fingerprint(a)
+        fa != null && fa == fingerprint(b)
+    } catch (e: Exception) {
+        false
     }
 
     /** Size and modification time of the source file, to tell whether it changed since we last saw it. */
@@ -2649,6 +2708,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
         private const val PREF_TOOL = "current_tool"
         private const val PREF_TOOL_ON = "tool_on"
+        private const val PREF_ERASER_PIXEL = "eraser_pixel"
         private const val PREF_TABS = "open_tabs"
         private const val MAX_TABS = 12
 

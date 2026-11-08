@@ -42,6 +42,8 @@ class PdfPageView(context: Context) : View(context) {
         val toolActive: Boolean get() = true
         /** A tap on an existing text note with the text tool. */
         fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {}
+        /** true = erase only the touched part of strokes; false = erase whole strokes. */
+        val eraserPixelMode: Boolean get() = false
         /** Eraser size (its own setting; also used for the S Pen side button). */
         val eraserWidth: Float get() = strokeWidth
         fun annotationsFor(page: Int): PageAnnotations
@@ -676,7 +678,7 @@ class PdfPageView(context: Context) : View(context) {
         val x = pt[0]
         val y = pt[1]
         val rn = eraserRadius / s
-        val strokesRemoved = a.strokes.removeAll { st ->
+        val strokesRemoved = if (h.eraserPixelMode) erasePixels(a, x, y, rn) else a.strokes.removeAll { st ->
             val reach = rn + st.width / 2f
             st.points.any { p -> hypot(p.x - x, p.y - y) < reach }
         }
@@ -686,6 +688,52 @@ class PdfPageView(context: Context) : View(context) {
             inkDirty = true
             h.onItemsErased(pageIndex)
         }
+    }
+
+    /**
+     * Pixel eraser: cuts the part of each stroke under the eraser, keeping the rest as
+     * separate strokes (so it stays vector ink, editable in other PDF apps).
+     */
+    private fun erasePixels(a: PageAnnotations, x: Float, y: Float, rn: Float): Boolean {
+        var changed = false
+        val out = ArrayList<InkStroke>(a.strokes.size)
+        for (st in a.strokes) {
+            val reach = rn + st.width / 2f
+            val pts = st.points
+            if (pts.none { hypot(it.x - x, it.y - y) < reach } &&
+                (1 until pts.size).none { segDist(pts[it - 1], pts[it], x, y) < reach }
+            ) {
+                out.add(st)
+                continue
+            }
+            changed = true
+            var run = ArrayList<StrokePoint>()
+            for (i in pts.indices) {
+                val p = pts[i]
+                val inside = hypot(p.x - x, p.y - y) < reach
+                val cut = i > 0 && segDist(pts[i - 1], p, x, y) < reach
+                if (inside || cut) {
+                    if (run.size >= 2) out.add(InkStroke(run, st.color, st.width, st.highlighter))
+                    run = ArrayList()
+                }
+                if (!inside) run.add(p)
+            }
+            if (run.size >= 2) out.add(InkStroke(run, st.color, st.width, st.highlighter))
+        }
+        if (changed) {
+            a.strokes.clear()
+            a.strokes.addAll(out)
+        }
+        return changed
+    }
+
+    /** Distance from (x, y) to the segment a-b. */
+    private fun segDist(a: StrokePoint, b: StrokePoint, x: Float, y: Float): Float {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val len2 = dx * dx + dy * dy
+        val t = if (len2 > 0f) (((x - a.x) * dx + (y - a.y) * dy) / len2).coerceIn(0f, 1f) else 0f
+        return hypot(a.x + t * dx - x, a.y + t * dy - y)
     }
 
     private fun endGesture() {
