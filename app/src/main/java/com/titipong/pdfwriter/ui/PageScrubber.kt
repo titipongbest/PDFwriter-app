@@ -38,13 +38,28 @@ class PageScrubber(context: Context, attrs: android.util.AttributeSet? = null) :
     private val d = resources.displayMetrics.density
     private val touchWidth = 40 * d
     private val pad = 24 * d
-    private val handleW = 6 * d
-    private val handleH = 44 * d
     private var dragging = false
 
-    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(40, 0, 0, 0) }
-    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(170, 55, 65, 81) }
-    private val handleActivePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2563EB") }
+    /** 0 = resting (small, faint), 1 = being touched (big, solid); animated in between. */
+    private var emphasis = 0f
+    private var animator: android.animation.ValueAnimator? = null
+
+    private fun animateEmphasis(target: Float) {
+        animator?.cancel()
+        animator = android.animation.ValueAnimator.ofFloat(emphasis, target).apply {
+            duration = 160
+            addUpdateListener {
+                emphasis = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun lerp(a: Float, b: Float) = a + (b - a) * emphasis
+
+    private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#2563EB") }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -70,11 +85,17 @@ class PageScrubber(context: Context, attrs: android.util.AttributeSet? = null) :
     override fun onDraw(canvas: Canvas) {
         if (pageCount <= 1) return
         val x = trackX
-        rect.set(x - 1.5f * d, pad, x + 1.5f * d, height - pad)
-        canvas.drawRoundRect(rect, 2 * d, 2 * d, trackPaint)
+        // Resting: hairline track and a slim, faint handle. Touched: wider, solid blue handle.
+        val trackW = lerp(1f, 3f) * d
+        trackPaint.color = Color.argb(lerp(18f, 50f).toInt(), 0, 0, 0)
+        rect.set(x - trackW / 2, pad, x + trackW / 2, height - pad)
+        canvas.drawRoundRect(rect, trackW, trackW, trackPaint)
+        val handleW = lerp(3f, 8f) * d
+        val handleH = lerp(28f, 52f) * d
+        handlePaint.color = blend(Color.argb(80, 55, 65, 81), Color.parseColor("#2563EB"), emphasis)
         val y = yForPage(page)
         rect.set(x - handleW / 2, y - handleH / 2, x + handleW / 2, y + handleH / 2)
-        canvas.drawRoundRect(rect, handleW / 2, handleW / 2, if (dragging) handleActivePaint else handlePaint)
+        canvas.drawRoundRect(rect, handleW / 2, handleW / 2, handlePaint)
         if (dragging) {
             val label = "${page + 1} / $pageCount"
             val tw = textPaint.measureText(label)
@@ -95,6 +116,7 @@ class PageScrubber(context: Context, attrs: android.util.AttributeSet? = null) :
             MotionEvent.ACTION_DOWN -> {
                 if (e.x < width - touchWidth) return false // not on the strip: let the page get it
                 dragging = true
+                animateEmphasis(1f)
                 parent?.requestDisallowInterceptTouchEvent(true)
                 scrubTo(e.y, finished = false)
             }
@@ -103,12 +125,19 @@ class PageScrubber(context: Context, attrs: android.util.AttributeSet? = null) :
                 if (dragging) {
                     dragging = false
                     onScrub?.invoke(page, true)
-                    invalidate()
+                    animateEmphasis(0f)
                 }
             }
         }
         return true
     }
+
+    private fun blend(a: Int, b: Int, t: Float): Int = Color.argb(
+        (Color.alpha(a) + (Color.alpha(b) - Color.alpha(a)) * t).toInt(),
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
+        (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt()
+    )
 
     private fun scrubTo(y: Float, finished: Boolean) {
         val p = pageForY(y)
