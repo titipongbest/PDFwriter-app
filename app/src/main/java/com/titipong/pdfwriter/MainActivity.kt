@@ -62,6 +62,7 @@ import com.titipong.pdfwriter.ui.PageAdapter
 import com.titipong.pdfwriter.ui.PageGridAdapter
 import com.titipong.pdfwriter.ui.PdfPageView
 import com.titipong.pdfwriter.ui.ReadingAdapter
+import com.titipong.pdfwriter.ui.SettingsDialog
 import com.titipong.pdfwriter.ui.ViewConfig
 import com.titipong.pdfwriter.ui.ViewModeDialog
 import com.titipong.pdfwriter.ui.ViewSettings
@@ -109,6 +110,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private var toolOn = true
     override val toolActive: Boolean get() = toolOn
     private var eraserPixel = false
+    override val inkSmoothing: Boolean get() = SettingsDialog.isOn(prefs, SettingsDialog.INK_SMOOTHING)
+    override val highlighterStraighten: Boolean
+        get() = SettingsDialog.isOn(prefs, SettingsDialog.HIGHLIGHTER_STRAIGHTEN)
     override val eraserPixelMode: Boolean get() = eraserPixel
     private var tappedNote: Pair<Int, TextNote>? = null
     override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
@@ -341,6 +345,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         R.id.action_export -> {
             showExportDialog()
+            true
+        }
+        R.id.action_print -> {
+            printDocument()
+            true
+        }
+        R.id.action_settings -> {
+            SettingsDialog.show(this, prefs)
             true
         }
         R.id.action_about -> {
@@ -1257,6 +1269,63 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 setStatus(R.string.saved_in_pdf)
             }
         }
+    }
+
+    // ================================================================ print
+
+    /** Prints the document with its ink, highlights and notes (flattened, as on screen). */
+    private fun printDocument() {
+        val src = localCopy ?: return
+        val pageCount = document?.pageCount ?: return
+        val snap = snapshotPages()
+        val snapBookmarks = snapshotBookmarks()
+        val jobName = docName.removeSuffix(".pdf")
+        val tmp = File(cacheDir, "print.pdf")
+        val pm = getSystemService(PRINT_SERVICE) as android.print.PrintManager
+        pm.print(jobName, object : android.print.PrintDocumentAdapter() {
+            override fun onLayout(
+                oldAttributes: android.print.PrintAttributes?,
+                newAttributes: android.print.PrintAttributes?,
+                cancellationSignal: android.os.CancellationSignal?,
+                callback: LayoutResultCallback?,
+                extras: Bundle?
+            ) {
+                if (cancellationSignal?.isCanceled == true) {
+                    callback?.onLayoutCancelled()
+                    return
+                }
+                val info = android.print.PrintDocumentInfo.Builder("$jobName.pdf")
+                    .setContentType(android.print.PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                    .setPageCount(pageCount)
+                    .build()
+                callback?.onLayoutFinished(info, oldAttributes != newAttributes)
+            }
+
+            override fun onWrite(
+                pages: Array<out android.print.PageRange>?,
+                destination: ParcelFileDescriptor?,
+                cancellationSignal: android.os.CancellationSignal?,
+                callback: WriteResultCallback?
+            ) {
+                val dest = destination ?: return
+                lifecycleScope.launch {
+                    try {
+                        PdfAnnotationIO.writeFile(src, snap, snapBookmarks, tmp, flatten = true)
+                        withContext(Dispatchers.IO) {
+                            val out = java.io.FileOutputStream(dest.fileDescriptor)
+                            tmp.inputStream().use { it.copyTo(out) }
+                            out.flush()
+                        }
+                        callback?.onWriteFinished(arrayOf(android.print.PageRange.ALL_PAGES))
+                    } catch (e: Throwable) {
+                        Toast.makeText(this@MainActivity, R.string.print_failed, Toast.LENGTH_LONG).show()
+                        callback?.onWriteFailed(e.message)
+                    } finally {
+                        tmp.delete()
+                    }
+                }
+            }
+        }, null)
     }
 
     // ================================================================ export

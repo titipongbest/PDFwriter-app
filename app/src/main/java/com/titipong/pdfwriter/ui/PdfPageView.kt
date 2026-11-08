@@ -42,6 +42,9 @@ class PdfPageView(context: Context) : View(context) {
         val toolActive: Boolean get() = true
         /** A tap on an existing text note with the text tool. */
         fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {}
+        /** Settings: smooth pen strokes; straighten free-highlighter strokes. */
+        val inkSmoothing: Boolean get() = false
+        val highlighterStraighten: Boolean get() = false
         /** true = erase only the touched part of strokes; false = erase whole strokes. */
         val eraserPixelMode: Boolean get() = false
         /** Eraser size (its own setting; also used for the S Pen side button). */
@@ -653,6 +656,7 @@ class PdfPageView(context: Context) : View(context) {
         val s = active ?: return
         active = null
         if (s.points.isEmpty()) return
+        refineStroke(s, h)
         val a = annotations ?: h.annotationsFor(pageIndex).also { annotations = it }
         a.strokes.add(s)
         // Draw just the new stroke onto the cache instead of rebuilding everything.
@@ -725,6 +729,50 @@ class PdfPageView(context: Context) : View(context) {
             a.strokes.addAll(out)
         }
         return changed
+    }
+
+    /** Applies the smoothing settings to a finished stroke (before it's stored / saved to the PDF). */
+    private fun refineStroke(s: InkStroke, h: Host) {
+        val pts = s.points
+        if (s.highlighter) {
+            if (!h.highlighterStraighten || pts.size < 2) return
+            val a = pts.first()
+            var b = pts.last()
+            val len = hypot(b.x - a.x, b.y - a.y)
+            if (len < 0.02f) return // a dab, not a line
+            val dev = pts.maxOf { segDist(a, b, it.x, it.y) }
+            if (dev > max(0.006f, len * 0.06f)) return // clearly not meant to be straight
+            // Nearly horizontal (within ~6 degrees): make it exactly horizontal, like a text line.
+            if (kotlin.math.abs(b.y - a.y) < kotlin.math.abs(b.x - a.x) * 0.1f) {
+                b = StrokePoint(b.x, a.y, b.pressure)
+            }
+            pts.clear()
+            pts.add(a)
+            pts.add(b)
+        } else {
+            if (!h.inkSmoothing || pts.size < 3) return
+            var cur: List<StrokePoint> = ArrayList(pts)
+            repeat(2) {
+                val out = ArrayList<StrokePoint>(cur.size)
+                out.add(cur.first())
+                for (i in 1 until cur.size - 1) {
+                    val p0 = cur[i - 1]
+                    val p1 = cur[i]
+                    val p2 = cur[i + 1]
+                    out.add(
+                        StrokePoint(
+                            (p0.x + 2 * p1.x + p2.x) / 4f,
+                            (p0.y + 2 * p1.y + p2.y) / 4f,
+                            (p0.pressure + 2 * p1.pressure + p2.pressure) / 4f
+                        )
+                    )
+                }
+                out.add(cur.last())
+                cur = out
+            }
+            pts.clear()
+            pts.addAll(cur)
+        }
     }
 
     /** Distance from (x, y) to the segment a-b. */
