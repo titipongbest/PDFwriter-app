@@ -30,7 +30,7 @@
     <string name="save_failed">บันทึกไม่สำเร็จ</string>
     <string name="save_pdf_failed">บันทึกลง PDF ไม่ได้ (รอยเขียนยังอยู่ในแอป)</string>
     <string name="loading">กำลังเปิด…</string>
-    <string name="export">บันทึกสำเนา PDF…</string>
+    <string name="export">ส่งออก…</string>
     <string name="export_done">บันทึกสำเนา PDF แล้ว</string>
     <string name="reset_zoom">ขนาดปกติ (ไม่ซูม)</string>
     <string name="size_minus">ลดขนาดเส้น 0.1</string>
@@ -140,4 +140,23 @@
     <string name="duplicate_pages_n">ทำสำเนา %1$d หน้า</string>
     <string name="page_copy_label">%1$d (สำเนาหน้า %2$d)</string>
     <string name="pages_duplicated">เพิ่มสำเนา %1$d หน้า กด “บันทึก” เพื่อบันทึกลงไฟล์</string>
+    <string name="export_title">ส่งออก</string>
+    <string name="export_identical">สำเนาเหมือนต้นฉบับ (แก้ไขรอยเขียนต่อได้)</string>
+    <string name="export_flattened">สำเนาแบบ Flatten (รวมรอยเขียนเข้ากับหน้า แก้ไม่ได้)</string>
+    <string name="export_extract">แยกหน้า (Extract)…</string>
+    <string name="select_all">เลือกทั้งหมด</string>
+    <string name="extract_hint">ติ๊กเลือกหน้าที่ต้องการ แล้วกด “แยกหน้า”</string>
+    <string name="extract_n">แยกหน้า (%1$d)</string>
+    <string name="extract_pick_one">เลือกอย่างน้อย 1 หน้า</string>
+    <string name="extract_as">ส่งออก %1$d หน้าเป็น</string>
+    <string name="extract_as_pdf">PDF ไฟล์เดียว</string>
+    <string name="extract_as_png">รูปภาพ PNG (หน้าละรูป คมชัด)</string>
+    <string name="extract_as_jpg">รูปภาพ JPG (หน้าละรูป ไฟล์เล็ก)</string>
+    <string name="extracting">กำลังแยกหน้า…</string>
+    <string name="extracting_image">กำลังสร้างรูป %1$d/%2$d…</string>
+    <string name="extract_pdf_done">แยกหน้าเป็น PDF แล้ว</string>
+    <string name="extract_images_done">บันทึก %1$d รูปแล้ว (Pictures/PDFWriter ในแกลเลอรี)</string>
+    <string name="extract_images_done_folder">บันทึก %1$d รูปในโฟลเดอร์ที่เลือกแล้ว</string>
+    <string name="extract_failed">แยกหน้าไม่สำเร็จ</string>
+    <string name="export_flat_done">บันทึกสำเนาแบบ Flatten แล้ว</string>
 </resources>

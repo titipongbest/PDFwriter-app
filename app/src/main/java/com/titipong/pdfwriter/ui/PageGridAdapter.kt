@@ -47,6 +47,16 @@ class PageGridAdapter(
     val slots = mutableListOf<Slot>()
     val selected = LinkedHashSet<Slot>()
 
+    /** Selection only (for "extract pages"): no dragging, no move labels. */
+    var pickMode = false
+
+    fun selectAll() {
+        selected.clear()
+        selected.addAll(slots)
+        notifyItemRangeChanged(0, itemCount, STATE_PAYLOAD)
+        onSelectionChanged()
+    }
+
     var editMode = false
         set(value) {
             field = value

@@ -31,6 +31,9 @@ import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
 import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationPopup
+import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
@@ -284,54 +287,141 @@ object PdfAnnotationIO {
         source: File,
         pages: Map<Int, PageAnnotations>,
         bookmarks: List<Bookmark>,
-        dest: Uri
-    ) =
-        writeLock.withLock {
-            withContext(Dispatchers.IO) {
-                val out = File(context.cacheDir, "pdfwriter-out.pdf")
-                PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
-                    if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
-                    val fonts = FontSet(doc)
-                    var index = 0
-                    for (page in doc.pages) {
-                        val geo = PageGeometry.of(page)
-                        val existing = page.annotations
-                        val kept = existing.filterNot { isManaged(it, geo) }
-                        val snap = pages[index]
-                        index++
-                        if (kept.size == existing.size && (snap == null || snap.isEmpty())) continue
-                        val list = ArrayList<PDAnnotation>(kept)
-                        if (snap != null && geo.displayWidth > 0f) {
-                            for (s in snap.strokes) if (s.points.isNotEmpty()) list.add(buildInk(doc, s, geo))
-                            for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
-                            for (h in snap.highlights) if (h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
-                        }
-                        page.annotations = list
-                    }
-                    writeBookmarks(doc, bookmarks)
-                    doc.save(out)
-                }
-                val os = try {
-                    context.contentResolver.openOutputStream(dest, "wt")
-                } catch (e: Exception) {
-                    context.contentResolver.openOutputStream(dest, "w")
-                } ?: throw java.io.IOException("Cannot write")
-                os.use { o -> out.inputStream().use { it.copyTo(o) } }
-                out.delete()
-            }
+        dest: Uri,
+        flatten: Boolean = false,
+        dropFileOutline: Boolean = false
+    ) = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            val out = File(context.cacheDir, "pdfwriter-out.pdf")
+            buildInto(source, pages, bookmarks, out, flatten, dropFileOutline)
+            val os = try {
+                context.contentResolver.openOutputStream(dest, "wt")
+            } catch (e: Exception) {
+                context.contentResolver.openOutputStream(dest, "w")
+            } ?: throw java.io.IOException("Cannot write")
+            os.use { o -> out.inputStream().use { it.copyTo(o) } }
+            out.delete()
         }
+    }
+
+    /** Same as [write], into a local file. */
+    suspend fun writeFile(
+        source: File,
+        pages: Map<Int, PageAnnotations>,
+        bookmarks: List<Bookmark>,
+        out: File,
+        flatten: Boolean = false,
+        dropFileOutline: Boolean = false
+    ) = writeLock.withLock {
+        withContext(Dispatchers.IO) { buildInto(source, pages, bookmarks, out, flatten, dropFileOutline) }
+    }
+
+    private fun buildInto(
+        source: File,
+        pages: Map<Int, PageAnnotations>,
+        bookmarks: List<Bookmark>,
+        out: File,
+        flatten: Boolean,
+        dropFileOutline: Boolean
+    ) {
+        PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+            if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
+            val fonts = FontSet(doc)
+            var index = 0
+            for (page in doc.pages) {
+                val geo = PageGeometry.of(page)
+                val existing = page.annotations
+                val kept = existing.filterNot { isManaged(it, geo) }
+                val snap = pages[index]
+                index++
+                if (kept.size == existing.size && (snap == null || snap.isEmpty())) continue
+                val list = ArrayList<PDAnnotation>(kept)
+                if (snap != null && geo.displayWidth > 0f) {
+                    for (st in snap.strokes) if (st.points.isNotEmpty()) list.add(buildInk(doc, st, geo))
+                    for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
+                    for (h in snap.highlights) if (h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
+                }
+                page.annotations = list
+            }
+            writeBookmarks(doc, bookmarks, dropFileOutline)
+            if (flatten) flattenAnnotations(doc)
+            doc.save(out)
+        }
+    }
+
+    /**
+     * Burns every visible annotation (ink, highlights, notes, other apps' markup) into the page
+     * content so it can't be edited any more. Links stay clickable; form fields are left alone.
+     */
+    private fun flattenAnnotations(doc: PDDocument) {
+        for (page in doc.pages) {
+            val annots = page.annotations
+            if (annots.isEmpty()) continue
+            val keep = ArrayList<PDAnnotation>()
+            var cs: PDPageContentStream? = null
+            try {
+                for (a in annots) {
+                    if (a is PDAnnotationLink || a is PDAnnotationWidget) {
+                        keep.add(a)
+                        continue
+                    }
+                    if (a is PDAnnotationPopup || a.isHidden || a.isNoView) continue
+                    val ap = a.normalAppearanceStream
+                    val rect = a.rectangle
+                    val bbox = ap?.bBox
+                    if (ap == null || rect == null || bbox == null) {
+                        keep.add(a) // nothing to draw it with; leave it as it is
+                        continue
+                    }
+                    // Map the appearance (after its own /Matrix) onto the annotation's rectangle.
+                    val m = ap.matrix
+                    val pts = listOf(
+                        m.transformPoint(bbox.lowerLeftX, bbox.lowerLeftY),
+                        m.transformPoint(bbox.upperRightX, bbox.lowerLeftY),
+                        m.transformPoint(bbox.lowerLeftX, bbox.upperRightY),
+                        m.transformPoint(bbox.upperRightX, bbox.upperRightY)
+                    )
+                    val x0 = pts.minOf { it.x }
+                    val x1 = pts.maxOf { it.x }
+                    val y0 = pts.minOf { it.y }
+                    val y1 = pts.maxOf { it.y }
+                    if (x1 - x0 <= 0f || y1 - y0 <= 0f) continue
+                    val sx = rect.width / (x1 - x0)
+                    val sy = rect.height / (y1 - y0)
+                    val stream = cs ?: PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true)
+                        .also { cs = it }
+                    stream.saveGraphicsState()
+                    val ca = num(a.cosObject.getDictionaryObject(COSName.CA)) ?: 1f
+                    if (ca < 1f) {
+                        val gs = PDExtendedGraphicsState()
+                        gs.strokingAlphaConstant = ca
+                        gs.nonStrokingAlphaConstant = ca
+                        stream.setGraphicsStateParameters(gs)
+                    }
+                    stream.transform(Matrix(sx, 0f, 0f, sy, rect.lowerLeftX - x0 * sx, rect.lowerLeftY - y0 * sy))
+                    stream.drawForm(ap)
+                    stream.restoreGraphicsState()
+                }
+            } finally {
+                cs?.close()
+            }
+            page.annotations = keep
+        }
+    }
 
     /**
      * Rebuilds the outline's top level: the file's own entries stay (with their sub-trees),
      * this app's bookmarks are replaced by [bookmarks]. PdfBox can't delete outline items,
      * so the top-level list is re-linked into a fresh outline.
      */
-    private fun writeBookmarks(doc: PDDocument, bookmarks: List<Bookmark>) {
+    private fun writeBookmarks(doc: PDDocument, bookmarks: List<Bookmark>, dropFileOutline: Boolean = false) {
         val catalog = doc.documentCatalog
         val old = catalog.documentOutline
         val existing = old?.children()?.toList() ?: emptyList()
-        val kept = existing.filterNot { it.cosObject.getBoolean(PW_BOOKMARK, false) }
-        if (kept.size == existing.size && bookmarks.isEmpty()) return // nothing of ours, nothing to add
+        // Extracted pages: the file's own table of contents would point at pages that aren't there.
+        val kept = if (dropFileOutline) emptyList()
+        else existing.filterNot { it.cosObject.getBoolean(PW_BOOKMARK, false) }
+        if (!dropFileOutline && kept.size == existing.size && bookmarks.isEmpty()) return // nothing of ours, nothing to add
 
         val outline = PDDocumentOutline()
         for (item in kept) {
@@ -500,7 +590,7 @@ object PdfAnnotationIO {
             setItem(COSName.S, COSName.getPDFName("S"))
         })
         if (s.highlighter) {
-            d.setFloat(COSName.CA, HIGHLIGHT_ALPHA)
+            // Transparency lives in the appearance only; also setting /CA would apply it twice.
             d.setBoolean(PW_HIGHLIGHTER, true)
         }
 

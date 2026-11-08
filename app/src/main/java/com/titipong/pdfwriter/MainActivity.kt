@@ -1,14 +1,19 @@
 package com.titipong.pdfwriter
 
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.view.Menu
@@ -25,6 +30,7 @@ import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doAfterTextChanged
@@ -37,6 +43,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import com.titipong.pdfwriter.databinding.ActivityMainBinding
+import com.titipong.pdfwriter.export.PageExporter
 import com.titipong.pdfwriter.model.Bookmark
 import com.titipong.pdfwriter.model.DrawTool
 import com.titipong.pdfwriter.model.InkStroke
@@ -64,7 +71,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FilterOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.util.Locale
 
 class MainActivity : AppCompatActivity(), PdfPageView.Host {
@@ -164,6 +173,29 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private val exportPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) exportCopy(uri)
+    }
+
+    private val exportFlat = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) exportCopy(uri, flatten = true)
+    }
+
+    // Extract pages: the pages picked in the overview, waiting for a destination.
+    private var pendingExtract: List<Int>? = null
+    private var pendingImageFormat: PageExporter.ImageFormat? = null
+
+    private val extractPdfTarget = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val sel = pendingExtract
+        pendingExtract = null
+        if (uri != null && sel != null) runExtractPdf(sel, uri)
+    }
+
+    /** Folder for images on Android 9 and older (newer versions save straight to the gallery). */
+    private val extractFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        val sel = pendingExtract
+        val fmt = pendingImageFormat
+        pendingExtract = null
+        pendingImageFormat = null
+        if (tree != null && sel != null && fmt != null) runExtractImages(sel, fmt, tree)
     }
 
     /** "Save as new file" for page edits on a file that can't be overwritten. */
@@ -279,7 +311,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             true
         }
         R.id.action_export -> {
-            if (document != null) exportPdf.launch(docName.removeSuffix(".pdf") + "-annotated.pdf")
+            showExportDialog()
             true
         }
         R.id.action_pages -> {
@@ -629,6 +661,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (!g.deleteSelected()) Toast.makeText(this, R.string.cannot_delete_all, Toast.LENGTH_SHORT).show()
         }
         binding.btnApplyEdit.setOnClickListener { onApplyEdit() }
+        binding.btnSelectAll.setOnClickListener { gridAdapter?.selectAll() }
         binding.btnDuplicatePages.setOnClickListener {
             val n = gridAdapter?.duplicateSelected() ?: 0
             if (n > 0) Toast.makeText(this, getString(R.string.pages_duplicated, n), Toast.LENGTH_SHORT).show()
@@ -646,7 +679,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
             ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, 0
         ) {
-            override fun isLongPressDragEnabled(): Boolean = gridAdapter?.editMode == true
+            override fun isLongPressDragEnabled(): Boolean =
+                gridAdapter?.editMode == true && gridAdapter?.pickMode != true
 
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
                 val from = vh.bindingAdapterPosition
@@ -719,9 +753,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun setEditMode(on: Boolean) {
+        val pick = on && gridAdapter?.pickMode == true
+        if (!on) gridAdapter?.pickMode = false
         gridAdapter?.editMode = on
         binding.panelHint.visibility = if (on) View.VISIBLE else View.GONE
-        binding.btnAddBlank.visibility = if (on) View.VISIBLE else View.GONE
+        binding.panelHint.setText(if (pick) R.string.extract_hint else R.string.edit_pages_hint)
+        binding.btnAddBlank.visibility = if (on && !pick) View.VISIBLE else View.GONE
+        binding.btnSelectAll.visibility = if (pick) View.VISIBLE else View.GONE
         binding.btnCancelEdit.visibility = if (on) View.VISIBLE else View.GONE
         binding.btnApplyEdit.visibility = if (on) View.VISIBLE else View.GONE
         binding.btnEditPages.visibility = if (on) View.GONE else View.VISIBLE
@@ -735,10 +773,23 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnDeletePages.text = getString(R.string.delete_pages_n, n)
         binding.btnDuplicatePages.visibility = binding.btnDeletePages.visibility
         binding.btnDuplicatePages.text = getString(R.string.duplicate_pages_n, n)
+        if (g?.pickMode == true) {
+            binding.btnDeletePages.visibility = View.GONE
+            binding.btnDuplicatePages.visibility = View.GONE
+            binding.btnApplyEdit.text = getString(R.string.extract_n, n)
+        } else {
+            binding.btnApplyEdit.setText(R.string.save)
+        }
     }
 
     private fun cancelEdit() {
         val g = gridAdapter ?: return
+        if (g.pickMode) {
+            // Extract was opened from the export menu: cancelling closes the overview.
+            setEditMode(false)
+            closePanelOrEdit()
+            return
+        }
         if (!g.isModified()) {
             setEditMode(false)
             return
@@ -782,6 +833,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun onApplyEdit() {
         val g = gridAdapter ?: return
+        if (g.pickMode) {
+            onExtract()
+            return
+        }
         if (!g.isModified()) {
             setEditMode(false)
             return
@@ -1059,20 +1114,171 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
     }
 
-    private fun exportCopy(dest: Uri) {
+    // ================================================================ export
+
+    private fun showExportDialog() {
+        if (document == null) return
+        val base = docName.removeSuffix(".pdf")
+        val items = arrayOf(
+            getString(R.string.export_identical),
+            getString(R.string.export_flattened),
+            getString(R.string.export_extract)
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.export_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> exportPdf.launch("$base-copy.pdf")
+                    1 -> exportFlat.launch("$base-flattened.pdf")
+                    else -> openExtractPicker()
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** The page overview in "tick pages to extract" mode. */
+    private fun openExtractPicker() {
+        openPanel(bookmarksTab = false)
+        val g = gridAdapter ?: return
+        g.pickMode = true
+        setEditMode(true)
+    }
+
+    private fun onExtract() {
+        val g = gridAdapter ?: return
+        val selected = g.slots.filter { it in g.selected }.mapNotNull { it.source }
+        if (selected.isEmpty()) {
+            Toast.makeText(this, R.string.extract_pick_one, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val base = docName.removeSuffix(".pdf")
+        val items = arrayOf(
+            getString(R.string.extract_as_pdf),
+            getString(R.string.extract_as_png),
+            getString(R.string.extract_as_jpg)
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.extract_as, selected.size))
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        pendingExtract = selected
+                        val range = if (selected.size == 1) "p${selected[0] + 1}" else "${selected.size}pages"
+                        extractPdfTarget.launch("$base-$range.pdf")
+                    }
+                    else -> {
+                        val fmt = if (which == 1) PageExporter.ImageFormat.PNG else PageExporter.ImageFormat.JPG
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            runExtractImages(selected, fmt, null)
+                        } else {
+                            pendingExtract = selected
+                            pendingImageFormat = fmt
+                            extractFolder.launch(null)
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun runExtractPdf(selected: List<Int>, dest: Uri) {
+        val src = localCopy ?: return
+        val snap = snapshotPages()
+        val snapBookmarks = snapshotBookmarks()
+        val progress = showProgress(getString(R.string.extracting))
+        lifecycleScope.launch {
+            val ok = try {
+                PageExporter.extractPdf(applicationContext, src, snap, snapBookmarks, selected, dest)
+                true
+            } catch (e: Throwable) {
+                false
+            }
+            progress.dismiss()
+            Toast.makeText(this@MainActivity, if (ok) R.string.extract_pdf_done else R.string.extract_failed, Toast.LENGTH_LONG).show()
+            if (ok) closePanelForce()
+        }
+    }
+
+    /** [folder] null = save to the gallery (Android 10+). */
+    private fun runExtractImages(selected: List<Int>, format: PageExporter.ImageFormat, folder: Uri?) {
+        val src = localCopy ?: return
+        val snap = snapshotPages()
+        val base = docName.removeSuffix(".pdf").replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        var cancelled = false
+        val (dialog, label) = showCancellableProgress(getString(R.string.extracting)) { cancelled = true }
+        lifecycleScope.launch {
+            val saved = try {
+                PageExporter.extractImages(
+                    applicationContext, src, snap, selected, base, format,
+                    openOutput = { name, mime ->
+                        if (folder == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) galleryOutput(name, mime)
+                        else if (folder != null) folderOutput(folder, name, mime)
+                        else null
+                    },
+                    onProgress = { done, total ->
+                        if (cancelled) throw java.util.concurrent.CancellationException()
+                        runOnUiThread { label.text = getString(R.string.extracting_image, done, total) }
+                    }
+                )
+            } catch (e: Throwable) {
+                -1
+            }
+            dialog.dismiss()
+            if (cancelled) return@launch
+            val msg = when {
+                saved <= 0 -> getString(R.string.extract_failed)
+                folder == null -> getString(R.string.extract_images_done, saved)
+                else -> getString(R.string.extract_images_done_folder, saved)
+            }
+            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+            if (saved > 0) closePanelForce()
+        }
+    }
+
+    /** Pictures/PDFWriter in the gallery; the file becomes visible once the stream is closed. */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun galleryOutput(name: String, mime: String): OutputStream? {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PDFWriter")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
+            ?: return null
+        val os = contentResolver.openOutputStream(uri) ?: return null
+        return object : FilterOutputStream(os) {
+            override fun write(b: ByteArray, off: Int, len: Int) = out.write(b, off, len)
+            override fun close() {
+                super.close()
+                contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            }
+        }
+    }
+
+    private fun folderOutput(tree: Uri, name: String, mime: String): OutputStream? = try {
+        val dir = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        DocumentsContract.createDocument(contentResolver, dir, mime, name)?.let { contentResolver.openOutputStream(it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun exportCopy(dest: Uri, flatten: Boolean = false) {
         val src = localCopy ?: return
         val snap = snapshotPages()
         val snapBookmarks = snapshotBookmarks()
         App.scope.launch {
             val ok = try {
-                PdfAnnotationIO.write(applicationContext, src, snap, snapBookmarks, dest)
+                PdfAnnotationIO.write(applicationContext, src, snap, snapBookmarks, dest, flatten = flatten)
                 true
             } catch (e: Throwable) {
                 false
             }
             Toast.makeText(
                 applicationContext,
-                if (ok) R.string.export_done else R.string.save_pdf_failed,
+                if (!ok) R.string.save_pdf_failed else if (flatten) R.string.export_flat_done else R.string.export_done,
                 Toast.LENGTH_LONG
             ).show()
         }
