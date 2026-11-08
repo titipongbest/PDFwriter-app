@@ -3,7 +3,9 @@ package com.titipong.pdfwriter.pdf
 import android.content.Context
 import android.graphics.Color
 import android.net.Uri
+import com.titipong.pdfwriter.model.Bookmark
 import com.titipong.pdfwriter.model.InkStroke
+import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
 import com.titipong.pdfwriter.model.TextNote
@@ -16,6 +18,7 @@ import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.cos.COSNumber
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.PDResources
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
@@ -25,6 +28,9 @@ import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
 import com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode
 import com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream
 import kotlinx.coroutines.Dispatchers
@@ -58,15 +64,30 @@ object PdfAnnotationIO {
     private val PW_Y = COSName.getPDFName("PWY")
     private val PW_COLOR = COSName.getPDFName("PWColor")
     private val PW_SIZE = COSName.getPDFName("PWSize")
+    private val PW_BOOKMARK = COSName.getPDFName("PWBookmark")
+    private val PREV = COSName.getPDFName("Prev")
+    private val NEXT = COSName.getPDFName("Next")
+    private val PARENT = COSName.getPDFName("Parent")
 
     private const val HIGHLIGHT_ALPHA = 0.35f
     private val writeLock = Mutex()
 
     // ------------------------------------------------------------------ read
 
-    /** Reads every Ink annotation (from any app) and this app's FreeText notes. */
-    fun read(file: File): MutableMap<Int, PageAnnotations> {
+    class ReadResult(
+        val pages: MutableMap<Int, PageAnnotations>,
+        val bookmarks: MutableList<Bookmark>,
+        val outline: List<OutlineEntry>
+    )
+
+    /**
+     * Reads every Ink annotation (from any app), this app's FreeText notes,
+     * this app's bookmarks, and the file's own table of contents.
+     */
+    fun read(file: File): ReadResult {
         val result = mutableMapOf<Int, PageAnnotations>()
+        val bookmarks = mutableListOf<Bookmark>()
+        val outline = mutableListOf<OutlineEntry>()
         PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
             var index = 0
             for (page in doc.pages) {
@@ -82,8 +103,36 @@ object PdfAnnotationIO {
                 if (!pa.isEmpty()) result[index] = pa
                 index++
             }
+            try {
+                doc.documentCatalog.documentOutline?.let { readOutline(doc, it, 0, bookmarks, outline) }
+            } catch (e: Exception) {
+                // A broken outline shouldn't stop the ink from loading.
+            }
         }
-        return result
+        return ReadResult(result, bookmarks, outline)
+    }
+
+    private fun readOutline(
+        doc: PDDocument,
+        node: PDOutlineNode,
+        depth: Int,
+        bookmarks: MutableList<Bookmark>,
+        outline: MutableList<OutlineEntry>
+    ) {
+        for (item in node.children()) {
+            val page = try {
+                item.findDestinationPage(doc)?.let { doc.pages.indexOf(it) } ?: -1
+            } catch (e: Exception) {
+                -1
+            }
+            val title = item.title ?: ""
+            if (item.cosObject.getBoolean(PW_BOOKMARK, false)) {
+                if (page >= 0) bookmarks.add(Bookmark(title, page))
+            } else {
+                outline.add(OutlineEntry(title, page, depth))
+                if (depth < 8) readOutline(doc, item, depth + 1, bookmarks, outline)
+            }
+        }
     }
 
     private fun num(b: COSBase?): Float? = (b as? COSNumber)?.floatValue()
@@ -172,7 +221,13 @@ object PdfAnnotationIO {
      * Writes [pages] into a copy of [source] and stores the result at [dest].
      * Ink/FreeText annotations previously imported are replaced; everything else in the file is kept.
      */
-    suspend fun write(context: Context, source: File, pages: Map<Int, PageAnnotations>, dest: Uri) =
+    suspend fun write(
+        context: Context,
+        source: File,
+        pages: Map<Int, PageAnnotations>,
+        bookmarks: List<Bookmark>,
+        dest: Uri
+    ) =
         writeLock.withLock {
             withContext(Dispatchers.IO) {
                 val out = File(context.cacheDir, "pdfwriter-out.pdf")
@@ -194,6 +249,7 @@ object PdfAnnotationIO {
                         }
                         page.annotations = list
                     }
+                    writeBookmarks(doc, bookmarks)
                     doc.save(out)
                 }
                 val os = try {
@@ -205,6 +261,68 @@ object PdfAnnotationIO {
                 out.delete()
             }
         }
+
+    /**
+     * Rebuilds the outline's top level: the file's own entries stay (with their sub-trees),
+     * this app's bookmarks are replaced by [bookmarks]. PdfBox can't delete outline items,
+     * so the top-level list is re-linked into a fresh outline.
+     */
+    private fun writeBookmarks(doc: PDDocument, bookmarks: List<Bookmark>) {
+        val catalog = doc.documentCatalog
+        val old = catalog.documentOutline
+        val existing = old?.children()?.toList() ?: emptyList()
+        val kept = existing.filterNot { it.cosObject.getBoolean(PW_BOOKMARK, false) }
+        if (kept.size == existing.size && bookmarks.isEmpty()) return // nothing of ours, nothing to add
+
+        val outline = PDDocumentOutline()
+        for (item in kept) {
+            item.cosObject.removeItem(PREV)
+            item.cosObject.removeItem(NEXT)
+            item.cosObject.removeItem(PARENT)
+            outline.addLast(item)
+        }
+        val pageCount = doc.numberOfPages
+        for (b in bookmarks.sortedBy { it.page }) {
+            if (b.page !in 0 until pageCount) continue
+            val item = PDOutlineItem()
+            item.title = b.title
+            item.setDestination(doc.getPage(b.page))
+            item.cosObject.setBoolean(PW_BOOKMARK, true)
+            outline.addLast(item)
+        }
+        outline.openNode()
+        catalog.documentOutline = if (outline.hasChildren()) outline else null
+    }
+
+    /**
+     * Writes a copy of [source] whose pages follow [order]: each entry is an index into the
+     * source, or null for a new blank page (same size as its neighbour). Pages keep their
+     * own annotations, links, and outline references because the same page objects are reused.
+     */
+    suspend fun rebuildPages(source: File, order: List<Int?>, out: File) = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+                if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
+                val tree = doc.pages
+                val old: List<PDPage> = tree.toList()
+                for (p in old) tree.remove(p)
+                order.forEachIndexed { i, src ->
+                    if (src != null) {
+                        tree.add(old[src])
+                    } else {
+                        val refIndex = order.subList(0, i).lastOrNull { it != null }
+                            ?: order.firstOrNull { it != null }
+                        val ref = refIndex?.let { old[it] }
+                        val box = ref?.cropBox ?: PDRectangle.A4
+                        val blank = PDPage(PDRectangle(box.width, box.height))
+                        if (ref != null) blank.rotation = ref.rotation
+                        tree.add(blank)
+                    }
+                }
+                doc.save(out)
+            }
+        }
+    }
 
     private fun rgb(color: Int) = floatArrayOf(Color.red(color) / 255f, Color.green(color) / 255f, Color.blue(color) / 255f)
 

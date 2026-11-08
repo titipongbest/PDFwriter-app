@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#FFFFFF"
@@ -12,6 +13,7 @@
         android:background="#FFFFFF" />
 
     <HorizontalScrollView
+        android:id="@+id/toolStrip"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#F8FAFC"
@@ -24,6 +26,20 @@
             android:orientation="horizontal"
             android:paddingHorizontal="8dp"
             android:paddingVertical="6dp">
+
+            <ImageButton
+                android:id="@+id/btnPages"
+                style="@style/ToolButton"
+                android:contentDescription="@string/pages"
+                android:src="@drawable/ic_pages" />
+
+            <ImageButton
+                android:id="@+id/btnBookmark"
+                style="@style/ToolButton"
+                android:contentDescription="@string/bookmark_toggle"
+                android:src="@drawable/ic_bookmark" />
+
+            <View style="@style/ToolDivider" />
 
             <ImageButton
                 android:id="@+id/btnPen"
@@ -60,19 +76,31 @@
 
             <View style="@style/ToolDivider" />
 
+            <TextView
+                android:id="@+id/btnSizeMinus"
+                style="@style/StepButton"
+                android:contentDescription="@string/size_minus"
+                android:text="−" />
+
             <SeekBar
                 android:id="@+id/seekSize"
-                android:layout_width="120dp"
+                android:layout_width="160dp"
                 android:layout_height="wrap_content"
                 android:contentDescription="@string/size" />
 
             <TextView
+                android:id="@+id/btnSizePlus"
+                style="@style/StepButton"
+                android:contentDescription="@string/size_plus"
+                android:text="+" />
+
+            <TextView
                 android:id="@+id/tvSize"
-                android:layout_width="22dp"
+                android:layout_width="40dp"
                 android:layout_height="wrap_content"
                 android:gravity="center"
-                android:textColor="#374151"
-                android:textSize="13sp" />
+                android:textColor="#111827"
+                android:textSize="14sp" />
 
             <View style="@style/ToolDivider" />
 
@@ -143,6 +171,126 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
                 android:text="@string/open_pdf" />
+        </LinearLayout>
+
+        <!-- Page overview / bookmarks panel -->
+        <LinearLayout
+            android:id="@+id/pagesPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#F3F4F6"
+            android:clickable="true"
+            android:focusable="true"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#FFFFFF"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="8dp">
+
+                <com.google.android.material.tabs.TabLayout
+                    android:id="@+id/panelTabs"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    app:tabGravity="start"
+                    app:tabMode="scrollable" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnAddBlank"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/add_blank_page"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDeletePages"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/delete_pages"
+                    android:textColor="#DC2626"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCancelEdit"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/cancel"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnEditPages"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="@string/edit_pages" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnApplyEdit"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="@string/save"
+                    android:visibility="gone" />
+
+                <ImageButton
+                    android:id="@+id/btnClosePanel"
+                    style="@style/ToolButton"
+                    android:layout_marginStart="4dp"
+                    android:contentDescription="@string/close"
+                    android:src="@drawable/ic_close" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/panelHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#EFF6FF"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp"
+                android:text="@string/edit_pages_hint"
+                android:textColor="#1E3A8A"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/pagesGrid"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:clipToPadding="false"
+                    android:padding="8dp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/bookmarksList"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="#FFFFFF"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/bookmarksEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:padding="32dp"
+                    android:text="@string/bookmarks_empty"
+                    android:textColor="#6B7280"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+            </FrameLayout>
         </LinearLayout>
     </FrameLayout>
 </LinearLayout>

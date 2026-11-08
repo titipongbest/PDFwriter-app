@@ -1,6 +1,7 @@
 package com.titipong.pdfwriter.storage
 
 import android.content.Context
+import com.titipong.pdfwriter.model.Bookmark
 import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
@@ -21,7 +22,11 @@ object AnnotationStorage {
     }
 
     /** synced = true when the same ink is already written into the PDF file itself. */
-    class Loaded(val pages: MutableMap<Int, PageAnnotations>, val synced: Boolean)
+    class Loaded(
+        val pages: MutableMap<Int, PageAnnotations>,
+        val bookmarks: MutableList<Bookmark>,
+        val synced: Boolean
+    )
 
     private fun fileFor(context: Context, key: String): File {
         val dir = File(context.filesDir, "annotations")
@@ -32,7 +37,7 @@ object AnnotationStorage {
 
     private fun r(v: Float, scale: Double): Double = Math.round(v * scale) / scale
 
-    fun toJson(pages: Map<Int, PageAnnotations>, synced: Boolean): String {
+    fun toJson(pages: Map<Int, PageAnnotations>, bookmarks: List<Bookmark>, synced: Boolean): String {
         val pagesJson = JSONObject()
         for ((index, page) in pages) {
             if (page.isEmpty()) continue
@@ -67,9 +72,17 @@ object AnnotationStorage {
             pagesJson.put(index.toString(), po)
         }
         val root = JSONObject()
-        root.put("v", 2)
+        val bm = JSONArray()
+        for (b in bookmarks) {
+            bm.put(JSONObject().apply {
+                put("t", b.title)
+                put("p", b.page)
+            })
+        }
+        root.put("v", 3)
         root.put("synced", synced)
         root.put("pages", pagesJson)
+        root.put("bookmarks", bm)
         return root.toString()
     }
 
@@ -93,6 +106,7 @@ object AnnotationStorage {
         val file = fileFor(context, key)
         if (!file.exists()) return null
         var synced = false
+        val bookmarks = mutableListOf<Bookmark>()
         try {
             val root = JSONObject(file.readText())
             synced = root.optBoolean("synced", false)
@@ -137,9 +151,14 @@ object AnnotationStorage {
                 }
                 result[k.toInt()] = page
             }
+            val bm = root.optJSONArray("bookmarks") ?: JSONArray()
+            for (i in 0 until bm.length()) {
+                val bo = bm.getJSONObject(i)
+                bookmarks.add(Bookmark(bo.getString("t"), bo.getInt("p")))
+            }
         } catch (e: Exception) {
             return null // corrupt file: fall back to the PDF's own annotations
         }
-        return Loaded(result, synced)
+        return Loaded(result, bookmarks, synced)
     }
 }

@@ -35,6 +35,7 @@ class PdfPageView(context: Context) : View(context) {
         fun onItemAdded(page: Int, item: Any)
         fun onItemsErased(page: Int)
         fun requestText(page: Int, x: Float, y: Float)
+        fun isBookmarked(page: Int): Boolean
     }
 
     private enum class Mode { NONE, INK, ERASE, TEXT }
@@ -62,6 +63,15 @@ class PdfPageView(context: Context) : View(context) {
             invalidateInk()
         }
 
+    /** Draws a bookmark ribbon at the top-right corner. */
+    var bookmarked = false
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+
     private val density = resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private val minEraserPx = 10f * density
@@ -79,6 +89,8 @@ class PdfPageView(context: Context) : View(context) {
     }
     private val path = Path()
     private val dst = RectF()
+    private val ribbonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EF4444") }
+    private val ribbonPath = Path()
 
     private var inkCache: Bitmap? = null
     private var inkDirty = true
@@ -133,7 +145,23 @@ class PdfPageView(context: Context) : View(context) {
             if (cache != null) canvas.drawBitmap(cache, 0f, 0f, null) else renderAnnotations(canvas, a, w)
         }
         active?.let { drawStroke(canvas, it, w) }
+        if (bookmarked) drawRibbon(canvas, w)
         if (mode == Mode.ERASE) canvas.drawCircle(eraserX, eraserY, eraserRadius, eraserPaint)
+    }
+
+    private fun drawRibbon(canvas: Canvas, w: Float) {
+        val rw = (w * 0.045f).coerceIn(10f * density, 28f * density)
+        val rh = rw * 1.5f
+        val right = w - rw * 0.8f
+        val left = right - rw
+        ribbonPath.reset()
+        ribbonPath.moveTo(left, 0f)
+        ribbonPath.lineTo(right, 0f)
+        ribbonPath.lineTo(right, rh)
+        ribbonPath.lineTo((left + right) / 2f, rh - rw * 0.4f)
+        ribbonPath.lineTo(left, rh)
+        ribbonPath.close()
+        canvas.drawPath(ribbonPath, ribbonPaint)
     }
 
     private fun ensureInkCache(a: PageAnnotations) {

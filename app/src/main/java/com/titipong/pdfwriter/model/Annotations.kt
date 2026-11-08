@@ -27,3 +27,9 @@ class PageAnnotations {
     val texts: MutableList<TextNote> = mutableListOf()
     fun isEmpty() = strokes.isEmpty() && texts.isEmpty()
 }
+
+/** A bookmark this app manages (stored in the PDF outline, marked /PWBookmark). */
+class Bookmark(var title: String, var page: Int)
+
+/** An entry of the file's own table of contents (read-only here). */
+class OutlineEntry(val title: String, val page: Int, val depth: Int)

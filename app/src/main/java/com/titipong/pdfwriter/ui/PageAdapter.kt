@@ -41,6 +41,7 @@ class PageAdapter(
             return
         }
         if (payloads.contains(INK_PAYLOAD)) {
+            holder.page.bookmarked = host.isBookmarked(position)
             holder.page.invalidateInk()
             return
         }
@@ -52,6 +53,7 @@ class PageAdapter(
         v.pageIndex = position
         v.pageAspect = doc.aspects[position]
         v.annotations = host.annotationsFor(position)
+        v.bookmarked = host.isBookmarked(position)
         v.bitmap = null
         render(holder, position)
     }
