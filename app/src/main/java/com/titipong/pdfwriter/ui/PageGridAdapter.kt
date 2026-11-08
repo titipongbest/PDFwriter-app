@@ -32,7 +32,7 @@ class PageGridAdapter(
 ) : RecyclerView.Adapter<PageGridAdapter.Holder>() {
 
     /** source = index in the current document, or null for a new blank page. */
-    class Slot(val source: Int?)
+    class Slot(val source: Int?, val isCopy: Boolean = false)
 
     class Holder(
         val root: FrameLayout,
@@ -87,6 +87,20 @@ class PageGridAdapter(
         notifyDataSetChanged()
         onSelectionChanged()
         return true
+    }
+
+    /** Inserts a copy right after each selected page (in page order). Returns how many were added. */
+    fun duplicateSelected(): Int {
+        if (selected.isEmpty()) return 0
+        val targets = slots.filter { it in selected }
+        for (s in targets.asReversed()) {
+            val pos = slots.indexOf(s)
+            slots.add(pos + 1, Slot(s.source, isCopy = true))
+        }
+        selected.clear()
+        notifyDataSetChanged()
+        onSelectionChanged()
+        return targets.size
     }
 
     /** Inserts a blank page after the last selected page, or at the end. Returns its position. */
@@ -194,6 +208,7 @@ class PageGridAdapter(
         holder.check.visibility = if (isSelected) View.VISIBLE else View.GONE
         holder.label.text = when {
             slot.source == null -> ctx.getString(R.string.page_blank_label, position + 1)
+            slot.isCopy -> ctx.getString(R.string.page_copy_label, position + 1, slot.source + 1)
             editMode && slot.source != position -> ctx.getString(R.string.page_moved_label, position + 1, slot.source + 1)
             else -> (position + 1).toString()
         }

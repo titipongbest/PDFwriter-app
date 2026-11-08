@@ -45,7 +45,7 @@
     <string name="tab_pages">หน้าทั้งหมด</string>
     <string name="tab_bookmarks">บุ๊กมาร์ก</string>
     <string name="edit_pages">แก้ไขหน้า</string>
-    <string name="edit_pages_hint">แตะเพื่อเลือกหน้า · กดค้างแล้วลากเพื่อย้ายตำแหน่ง · กด “บันทึก” เมื่อเสร็จ</string>
+    <string name="edit_pages_hint">แตะเพื่อเลือกหน้า แล้วลบหรือทำสำเนาได้ · กดค้างแล้วลากเพื่อย้ายตำแหน่ง · กด “บันทึก” เมื่อเสร็จ</string>
     <string name="add_blank_page">+ เพิ่มหน้าว่าง</string>
     <string name="delete_pages">ลบหน้าที่เลือก</string>
     <string name="delete_pages_n">ลบ %1$d หน้า</string>
@@ -137,4 +137,7 @@
     <string name="selection_chars">เลือก %1$d ตัวอักษร</string>
     <string name="text_preparing">กำลังเตรียมข้อความในเอกสาร…</string>
     <string name="no_text_here">หน้านี้ไม่มีข้อความให้เลือก (อาจเป็นภาพสแกน) ลองกด OCR ก่อน</string>
+    <string name="duplicate_pages_n">ทำสำเนา %1$d หน้า</string>
+    <string name="page_copy_label">%1$d (สำเนาหน้า %2$d)</string>
+    <string name="pages_duplicated">เพิ่มสำเนา %1$d หน้า กด “บันทึก” เพื่อบันทึกลงไฟล์</string>
 </resources>

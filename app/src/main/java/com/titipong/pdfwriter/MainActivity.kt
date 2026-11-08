@@ -629,6 +629,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (!g.deleteSelected()) Toast.makeText(this, R.string.cannot_delete_all, Toast.LENGTH_SHORT).show()
         }
         binding.btnApplyEdit.setOnClickListener { onApplyEdit() }
+        binding.btnDuplicatePages.setOnClickListener {
+            val n = gridAdapter?.duplicateSelected() ?: 0
+            if (n > 0) Toast.makeText(this, getString(R.string.pages_duplicated, n), Toast.LENGTH_SHORT).show()
+        }
 
         binding.bookmarksList.layoutManager = LinearLayoutManager(this)
         bookmarkAdapter = BookmarkAdapter(
@@ -729,6 +733,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val n = g?.selected?.size ?: 0
         binding.btnDeletePages.visibility = if (g?.editMode == true && n > 0) View.VISIBLE else View.GONE
         binding.btnDeletePages.text = getString(R.string.delete_pages_n, n)
+        binding.btnDuplicatePages.visibility = binding.btnDeletePages.visibility
+        binding.btnDuplicatePages.text = getString(R.string.duplicate_pages_n, n)
     }
 
     private fun cancelEdit() {

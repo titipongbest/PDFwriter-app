@@ -365,9 +365,12 @@ object PdfAnnotationIO {
                 val tree = doc.pages
                 val old: List<PDPage> = tree.toList()
                 for (p in old) tree.remove(p)
+                val used = HashSet<Int>()
                 order.forEachIndexed { i, src ->
-                    if (src != null) {
+                    if (src != null && used.add(src)) {
                         tree.add(old[src])
+                    } else if (src != null) {
+                        tree.add(duplicatePage(old[src]))
                     } else {
                         val refIndex = order.subList(0, i).lastOrNull { it != null }
                             ?: order.firstOrNull { it != null }
@@ -432,6 +435,20 @@ object PdfAnnotationIO {
                 doc.save(out)
             }
         }
+    }
+
+    /**
+     * A copy of [page] that shares its content and resources (allowed in PDF, keeps the file small).
+     * Annotations aren't shared between pages: this app's ink is re-added from its own copy,
+     * other annotations (e.g. links) stay only on the original.
+     */
+    private fun duplicatePage(page: PDPage): PDPage {
+        val dict = COSDictionary(page.cosObject)
+        dict.removeItem(COSName.PARENT)
+        dict.removeItem(COSName.ANNOTS)
+        dict.removeItem(COSName.STRUCT_PARENTS)
+        dict.removeItem(PW_OCR)
+        return PDPage(dict)
     }
 
     private fun rgb(color: Int) = floatArrayOf(Color.red(color) / 255f, Color.green(color) / 255f, Color.blue(color) / 255f)

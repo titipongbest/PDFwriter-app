@@ -440,6 +440,13 @@
                     android:visibility="gone" />
 
                 <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDuplicatePages"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDeletePages"
                     style="@style/Widget.Material3.Button.TextButton"
                     android:layout_width="wrap_content"
