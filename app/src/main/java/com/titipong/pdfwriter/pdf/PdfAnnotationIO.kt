@@ -43,6 +43,7 @@ import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
 import com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.titipong.pdfwriter.model.ImageNote
+import com.titipong.pdfwriter.model.TextLayout
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +86,7 @@ object PdfAnnotationIO {
     private val PW_IMAGE = COSName.getPDFName("PWImage")
     private val PW_W = COSName.getPDFName("PWW")
     private val PW_H = COSName.getPDFName("PWH")
+    private val PW_ALIGN = COSName.getPDFName("PWAlign")
 
     /** Where pictures read from PDFs are stored (set by App). */
     @Volatile
@@ -266,7 +268,9 @@ object PdfAnnotationIO {
                 num(d.getDictionaryObject(PW_X)) ?: 0f,
                 num(d.getDictionaryObject(PW_Y)) ?: 0f,
                 d.getInt(PW_COLOR, Color.BLACK),
-                num(d.getDictionaryObject(PW_SIZE)) ?: 0.03f
+                num(d.getDictionaryObject(PW_SIZE)) ?: 0.03f,
+                num(d.getDictionaryObject(PW_W)) ?: 0f,
+                d.getInt(PW_ALIGN, 0)
             )
         }
     } catch (e: Exception) {
@@ -803,17 +807,24 @@ object PdfAnnotationIO {
 
     private fun buildText(doc: PDDocument, t: TextNote, geo: PageGeometry, fonts: FontSet): PDAnnotation {
         val size = max(t.size * geo.displayWidth, 2f)
-        val runs = fonts.split(t.text)
-        var textWidth = 0f
-        for ((font, str) in runs) {
-            textWidth += try { font.getStringWidth(str) / 1000f * size } catch (e: Exception) { size * str.length * 0.5f }
+        fun widthPt(str: String): Float {
+            var w = 0f
+            for ((font, part) in fonts.split(str)) {
+                w += try { font.getStringWidth(part) / 1000f * size } catch (e: Exception) { size * part.length * 0.5f }
+            }
+            return w
         }
+        // Same line breaking as on screen (in page points here).
+        val lines = TextLayout.lines(t.text, t.width * geo.displayWidth, ::widthPt)
+        val boxW = if (t.width > 0f) t.width * geo.displayWidth else lines.maxOfOrNull { it.width } ?: 0f
+        val lineH = size * TextLayout.LINE_HEIGHT
         // Box in display-up space, then mapped to user space.
-        val x0 = geo.upX(t.x) - 2f
-        val x1 = geo.upX(t.x) + textWidth + 2f
+        val left = geo.upX(t.x)
         val baseY = geo.upY(t.y)
-        val y0 = baseY - size * 0.35f
+        val x0 = left - 2f
+        val x1 = left + boxW + 2f
         val y1 = baseY + size * 1.05f
+        val y0 = baseY - lineH * (lines.size - 1) - size * 0.35f
         val corners = listOf(
             upToUser(geo, x0, y0), upToUser(geo, x1, y0), upToUser(geo, x0, y1), upToUser(geo, x1, y1)
         )
@@ -826,28 +837,35 @@ object PdfAnnotationIO {
         val d = baseDict(FREE_TEXT, rect)
         d.setString(COSName.CONTENTS, t.text)
         d.setString(COSName.DA, String.format(Locale.US, "/Helv %.1f Tf %.3f %.3f %.3f rg", size, c[0], c[1], c[2]))
+        d.setInt(COSName.Q, t.align.coerceIn(0, 2)) // standard alignment key
         d.setItem(COSName.BS, COSDictionary().apply { setFloat(COSName.W, 0f) })
         d.setBoolean(PW_TEXT, true)
         d.setFloat(PW_X, t.x)
         d.setFloat(PW_Y, t.y)
         d.setInt(PW_COLOR, t.color)
         d.setFloat(PW_SIZE, t.size)
+        d.setFloat(PW_W, t.width)
+        d.setInt(PW_ALIGN, t.align)
 
         val annot = PDAnnotation.createAnnotation(d)
-        if (runs.isNotEmpty()) {
+        if (lines.any { it.text.isNotEmpty() }) {
             val ap = PDAppearanceStream(doc)
             ap.bBox = rect
             ap.resources = PDResources()
             PDPageContentStream(doc, ap).use { cs ->
                 cs.transform(geo.displayUpMatrix())
-                cs.beginText()
                 cs.setNonStrokingColor(c[0], c[1], c[2])
-                cs.newLineAtOffset(geo.upX(t.x), baseY)
-                for ((font, str) in runs) {
-                    cs.setFont(font, size)
-                    cs.showText(str)
+                lines.forEachIndexed { i, line ->
+                    val runs = fonts.split(line.text)
+                    if (runs.isEmpty()) return@forEachIndexed
+                    cs.beginText()
+                    cs.newLineAtOffset(left + TextLayout.offset(t.align, boxW, line.width), baseY - lineH * i)
+                    for ((font, str) in runs) {
+                        cs.setFont(font, size)
+                        cs.showText(str)
+                    }
+                    cs.endText()
                 }
-                cs.endText()
             }
             annot.appearance = PDAppearanceDictionary().apply { setNormalAppearance(ap) }
         }

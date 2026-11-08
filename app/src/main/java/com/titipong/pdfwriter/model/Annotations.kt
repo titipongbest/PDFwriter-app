@@ -13,14 +13,25 @@ class InkStroke(
     val highlighter: Boolean
 )
 
-/** x,y = baseline-left, size = text size; all normalized to page width. */
+/**
+ * A text box. x = left edge, y = baseline of the first line, size = text size; all normalized to
+ * page width. [text] may have several lines ("\n"). [width] = box width (0 = as wide as the longest
+ * line, no wrapping); longer lines wrap at word boundaries (Thai too). [align]: 0 left, 1 center, 2 right.
+ */
 class TextNote(
     val text: String,
     val x: Float,
     val y: Float,
     val color: Int,
-    val size: Float
-)
+    val size: Float,
+    val width: Float = 0f,
+    val align: Int = 0
+) {
+    fun copy(
+        text: String = this.text, x: Float = this.x, y: Float = this.y, color: Int = this.color,
+        size: Float = this.size, width: Float = this.width, align: Int = this.align
+    ) = TextNote(text, x, y, color, size, width, align)
+}
 
 /**
  * A picture placed on the page. [file] is the image in the app's storage; x,y = top-left and

@@ -20,6 +20,7 @@ import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
 import com.titipong.pdfwriter.model.TextNote
 import com.titipong.pdfwriter.model.ImageNote
+import com.titipong.pdfwriter.model.TextLayout
 import kotlin.math.hypot
 import kotlin.math.max
 
@@ -48,6 +49,8 @@ class PdfPageView(context: Context) : View(context) {
         fun requestImage(page: Int, x: Float, y: Float) {}
         /** Highlighter tool: a tap on an existing highlighter stroke. */
         fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {}
+        /** Lines of the document's own text on [page] (normalized boxes), to align notes / pictures with. */
+        fun guideBoxes(page: Int): List<RectF> = emptyList()
         /** The selected text note is being dragged (hide popups), and was moved / resized. */
         fun onNoteDragStart() {}
         /** A tap away from the selected note: unselect it (instead of adding a new note). */
@@ -169,6 +172,13 @@ class PdfPageView(context: Context) : View(context) {
             floatArrayOf(5f * resources.displayMetrics.density, 4f * resources.displayMetrics.density), 0f
         )
     }
+    private val sideRect = RectF()
+    private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(236, 72, 153)
+        strokeWidth = 1.2f * resources.displayMetrics.density
+    }
+    private val guidesX = ArrayList<Float>()
+    private val guidesY = ArrayList<Float>()
     private val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val imageDst = RectF()
     private val handleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
@@ -314,11 +324,21 @@ class PdfPageView(context: Context) : View(context) {
 
     /** Text notes as normalized boxes (for placing a popup over one). */
     fun textBox(note: TextNote): RectF {
-        val s = pageScale.coerceAtLeast(1f)
-        textPaint.textSize = note.size * s
-        val w = textPaint.measureText(note.text) / s
-        return RectF(note.x, note.y - note.size, note.x + w, note.y + note.size * 0.3f)
+        val lines = layoutText(note)
+        val w = boxWidth(note, lines)
+        val bottom = note.y + note.size * TextLayout.LINE_HEIGHT * (lines.size - 1) + note.size * 0.3f
+        return RectF(note.x, note.y - note.size, note.x + w, bottom)
     }
+
+    /** The note's lines, widths normalized to the page width (same breaking as the PDF writer). */
+    private fun layoutText(t: TextNote): List<TextLayout.Line> {
+        val s = pageScale.coerceAtLeast(1f)
+        textPaint.textSize = t.size * s
+        return TextLayout.lines(t.text, t.width) { textPaint.measureText(it) / s }
+    }
+
+    private fun boxWidth(t: TextNote, lines: List<TextLayout.Line>): Float =
+        if (t.width > 0f) t.width else lines.maxOfOrNull { it.width } ?: 0f
 
     /** Where a normalized page point ends up in this view (y), e.g. to scroll a search match into view. */
     fun viewYOf(nx: Float, ny: Float): Float {
@@ -399,6 +419,15 @@ class PdfPageView(context: Context) : View(context) {
             for ((cx, cy) in corners(f)) {
                 canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleFill)
                 canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleStroke)
+            }
+            if (n is TextNote) {
+                // Side handles: drag to set the box width (text wraps).
+                val cy = f.centerY() * s
+                for (cx in floatArrayOf(f.left * s, f.right * s)) {
+                    sideRect.set(cx - hs * 0.7f, cy - hs * 1.8f, cx + hs * 0.7f, cy + hs * 1.8f)
+                    canvas.drawRoundRect(sideRect, hs, hs, handleFill)
+                    canvas.drawRoundRect(sideRect, hs, hs, handleStroke)
+                }
             }
         }
         hits?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, hitPaint) }
@@ -483,9 +512,21 @@ class PdfPageView(context: Context) : View(context) {
         for (st in a.strokes) drawStroke(canvas, st, s, filter)
         textPaint.colorFilter = filter
         for (t in a.texts) {
+            val lines = layoutText(t)
+            val bw = boxWidth(t, lines)
             textPaint.color = t.color
             textPaint.textSize = t.size * s
-            canvas.drawText(t.text, t.x * s, t.y * s, textPaint)
+            lines.forEachIndexed { i, line ->
+                val lx = t.x + TextLayout.offset(t.align, bw, line.width)
+                val ly = t.y + t.size * TextLayout.LINE_HEIGHT * i
+                canvas.drawText(line.text, lx * s, ly * s, textPaint)
+            }
+        }
+        // While dragging: alignment guides.
+        if (guidesX.isNotEmpty() || guidesY.isNotEmpty()) {
+            val ph = pageAspect * s
+            for (gx in guidesX) canvas.drawLine(gx * s, 0f, gx * s, ph, guidePaint)
+            for (gy in guidesY) canvas.drawLine(0f, gy * s, s, gy * s, guidePaint)
         }
     }
 
@@ -731,6 +772,8 @@ class PdfPageView(context: Context) : View(context) {
                         else -> 0
                     }
                 } else when {
+                    note is TextNote && hypot(f.left - x, f.centerY() - y) < grab -> 8
+                    note is TextNote && hypot(f.right - x, f.centerY() - y) < grab -> 9
                     corner >= 0 -> 2 + corner
                     RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y) -> 1
                     else -> 0
@@ -754,15 +797,28 @@ class PdfPageView(context: Context) : View(context) {
                     dragMoved = true
                     h.onNoteDragStart()
                 }
-                val updated: Any = when {
+                // Snap the finger / pen to alignment lines (resizing); moving snaps the whole frame below.
+                guidesX.clear()
+                guidesY.clear()
+                if (dragKind != 1) {
+                    val (sx, sy) = snapPoint(pt[0], pt[1], orig)
+                    pt[0] = sx
+                    pt[1] = sy
+                }
+                var updated: Any = when {
+                    orig is TextNote && (dragKind == 8 || dragKind == 9) -> widened(orig, dragKind == 8, pt[0])
                     orig is InkStroke && dragKind == 1 ->
                         InkStroke(orig.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), orig.color, orig.width, orig.highlighter)
                     orig is InkStroke && dragKind >= 6 -> stretched(orig, dragKind - 6, pt[0], pt[1])
-                    dragKind == 1 && orig is TextNote -> TextNote(orig.text, orig.x + dx, orig.y + dy, orig.color, orig.size)
+                    dragKind == 1 && orig is TextNote -> orig.copy(x = orig.x + dx, y = orig.y + dy)
                     dragKind == 1 && orig is ImageNote -> ImageNote(orig.file, orig.x + dx, orig.y + dy, orig.w, orig.h)
                     else -> resized(orig, dragKind - 2, pt[0], pt[1]) ?: return true
                 }
+                if (dragKind == 1) updated = snapMove(updated, orig)
+                val before = guidesX.size + guidesY.size
                 replaceNote(editingNote ?: return true, updated)
+                if (before > 0 && lastGuideCount == 0) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                lastGuideCount = before
                 return true
             }
             MotionEvent.ACTION_UP -> {
@@ -770,6 +826,10 @@ class PdfPageView(context: Context) : View(context) {
                 val orig = dragOriginal
                 val now = editingNote
                 dragKind = 0
+                guidesX.clear()
+                guidesY.clear()
+                lastGuideCount = 0
+                invalidate()
                 parent?.requestDisallowInterceptTouchEvent(false)
                 if (dragMoved && orig != null && now != null && now !== orig) {
                     h.onNoteChanged(this, pageIndex, orig, now)
@@ -785,10 +845,96 @@ class PdfPageView(context: Context) : View(context) {
             MotionEvent.ACTION_CANCEL -> {
                 if (dragKind == 0) return false
                 dragKind = 0
+                guidesX.clear()
+                guidesY.clear()
+                lastGuideCount = 0
+                invalidate()
                 return true
             }
         }
         return dragKind != 0
+    }
+
+    private var lastGuideCount = 0
+
+    /** Text box with its left or right side moved to [x] (sets an explicit width; text wraps). */
+    private fun widened(orig: TextNote, leftSide: Boolean, x: Float): TextNote {
+        val b = textBox(orig)
+        val minW = orig.size * 2f
+        return if (leftSide) {
+            val newLeft = x.coerceAtMost(b.right - minW)
+            orig.copy(x = newLeft, width = b.right - newLeft)
+        } else {
+            orig.copy(width = (x - b.left).coerceAtLeast(minW))
+        }
+    }
+
+    // ---------------------------------------------------------------- alignment guides (snapping)
+
+    /** Lines to align with: page edges and center, other notes / pictures, the document's text lines. */
+    private fun guideTargets(exclude: Any): Pair<List<Float>, List<Float>> {
+        val xs = arrayListOf(0f, 0.5f, 1f)
+        val ys = arrayListOf(0f, pageAspect / 2f, pageAspect)
+        val a = annotations
+        if (a != null) {
+            val frames = a.texts.filter { it !== exclude && it !== editingNote }.map { textBox(it) } +
+                a.images.filter { it !== exclude && it !== editingNote }.map { RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
+            for (f in frames) {
+                xs += f.left; xs += f.centerX(); xs += f.right
+                ys += f.top; ys += f.centerY(); ys += f.bottom
+            }
+        }
+        host?.guideBoxes(pageIndex)?.forEach { r ->
+            xs += r.left; xs += r.right
+            ys += r.bottom
+        }
+        return xs to ys
+    }
+
+    private fun snapThreshold() = 8f * density / pageScale.coerceAtLeast(1f)
+
+    /** Nearest target within the threshold to any of [values]: (shift, target) or null. */
+    private fun nearest(values: FloatArray, targets: List<Float>): Pair<Float, Float>? {
+        val thr = snapThreshold()
+        var best: Pair<Float, Float>? = null
+        var bestD = thr
+        for (v in values) for (t in targets) {
+            val d = kotlin.math.abs(t - v)
+            if (d < bestD) {
+                bestD = d
+                best = (t - v) to t
+            }
+        }
+        return best
+    }
+
+    /** A moved item shifted so one of its edges / center lines up with a guide; records the guides. */
+    private fun snapMove(item: Any, orig: Any): Any {
+        val f = (item as? TextNote)?.let { textBox(it) } ?: noteFrame(item) ?: return item
+        val (xs, ys) = guideTargets(orig)
+        val sx = nearest(floatArrayOf(f.left, f.centerX(), f.right), xs)
+        val sy = nearest(floatArrayOf(f.top, f.centerY(), f.bottom), ys)
+        val dx = sx?.first ?: 0f
+        val dy = sy?.first ?: 0f
+        sx?.let { guidesX += it.second }
+        sy?.let { guidesY += it.second }
+        if (dx == 0f && dy == 0f) return item
+        return when (item) {
+            is TextNote -> item.copy(x = item.x + dx, y = item.y + dy)
+            is ImageNote -> ImageNote(item.file, item.x + dx, item.y + dy, item.w, item.h)
+            is InkStroke -> InkStroke(item.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), item.color, item.width, item.highlighter)
+            else -> item
+        }
+    }
+
+    /** A dragged handle position snapped to guides (resizing / stretching); records the guides. */
+    private fun snapPoint(x: Float, y: Float, orig: Any): Pair<Float, Float> {
+        val (xs, ys) = guideTargets(orig)
+        val sx = nearest(floatArrayOf(x), xs)
+        val sy = nearest(floatArrayOf(y), ys)
+        sx?.let { guidesX += it.second }
+        sy?.let { guidesY += it.second }
+        return (sx?.second ?: x) to (sy?.second ?: y)
     }
 
     /** A straight line with end [end] moved along the line's direction to (x, y)'s position on it. */
@@ -823,10 +969,11 @@ class PdfPageView(context: Context) : View(context) {
         }
         if (orig !is TextNote) return null
         val size = (orig.size * scale).coerceIn(0.006f, 0.4f)
-        val trial = TextNote(orig.text, orig.x, orig.y, orig.color, size)
+        val width = if (orig.width > 0f) orig.width * (size / orig.size) else 0f
+        val trial = orig.copy(size = size, width = width)
         val nf = noteFrame(trial) ?: return null
         val (tx, ty) = corners(nf)[(corner + 2) % 4]
-        return TextNote(orig.text, orig.x + (ax - tx), orig.y + (ay - ty), orig.color, size)
+        return trial.copy(x = orig.x + (ax - tx), y = orig.y + (ay - ty))
     }
 
     private fun replaceNote(old: Any, new: Any) {
@@ -876,9 +1023,8 @@ class PdfPageView(context: Context) : View(context) {
         if (s <= 0f) return null
         val pad = 6f * density / s
         return annotations?.texts?.lastOrNull { t ->
-            textPaint.textSize = t.size * s
-            val tw = textPaint.measureText(t.text) / s
-            nx >= t.x - pad && nx <= t.x + tw + pad && ny >= t.y - t.size - pad && ny <= t.y + t.size * 0.3f + pad
+            val b = textBox(t)
+            nx >= b.left - pad && nx <= b.right + pad && ny >= b.top - pad && ny <= b.bottom + pad
         }
     }
 

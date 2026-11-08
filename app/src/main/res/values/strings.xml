@@ -188,6 +188,9 @@
     <string name="set_hl_smoothing">Free Highlighter Smoothing</string>
     <string name="tool_image">Image</string>
     <string name="new_pdf">New</string>
+    <string name="align_left">Align left</string>
+    <string name="align_center">Center</string>
+    <string name="align_right">Align right</string>
     <string name="new_name">Name</string>
     <string name="new_default_name">Notes</string>
     <string name="new_orientation">Orientation</string>

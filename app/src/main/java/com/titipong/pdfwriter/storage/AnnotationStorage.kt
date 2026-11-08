@@ -65,6 +65,8 @@ object AnnotationStorage {
                 to.put("y", t.y.toDouble())
                 to.put("c", t.color)
                 to.put("z", t.size.toDouble())
+                if (t.width > 0f) to.put("w", t.width.toDouble())
+                if (t.align != 0) to.put("a", t.align)
                 texts.put(to)
             }
             val hls = JSONArray()
@@ -197,7 +199,9 @@ object AnnotationStorage {
                             to.getDouble("x").toFloat(),
                             to.getDouble("y").toFloat(),
                             to.getInt("c"),
-                            to.getDouble("z").toFloat()
+                            to.getDouble("z").toFloat(),
+                            to.optDouble("w", 0.0).toFloat(),
+                            to.optInt("a", 0)
                         )
                     )
                 }

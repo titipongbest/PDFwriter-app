@@ -119,6 +119,14 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
 
     // ------------------------------------------------------------ selection (view mode)
 
+    /** The page's text lines as boxes (for alignment guides); empty until the page is read. */
+    fun lineBoxes(page: Int): List<RectF> {
+        lineCache[page]?.let { return it }
+        val pt = texts.getOrNull(page) ?: return emptyList()
+        return lineRects(pt.rects).also { lineCache[page] = it }
+    }
+    private val lineCache = java.util.concurrent.ConcurrentHashMap<Int, List<RectF>>()
+
     fun hasText(page: Int): Boolean = texts.getOrNull(page)?.compact?.isNotEmpty() == true
 
     /**

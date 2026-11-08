@@ -732,7 +732,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun requestText(page: Int, x: Float, y: Float) {
         clearSelection()
-        promptText(getString(R.string.add_text), "") { text ->
+        promptText(getString(R.string.add_text), "", multiLine = true) { text ->
             val note = TextNote(text, x, y, color, 0.018f + 0.004f * sizeValue)
             annotationsFor(page).texts.add(note)
             adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
@@ -740,11 +740,18 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
     }
 
-    private fun promptText(title: String, initial: String, onOk: (String) -> Unit) {
+    private fun promptText(title: String, initial: String, multiLine: Boolean = false, onOk: (String) -> Unit) {
         val input = EditText(this).apply {
             hint = getString(R.string.text_hint)
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
+            if (multiLine) {
+                // Text boxes: Enter starts a new line.
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                minLines = 2
+                maxLines = 8
+            } else {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine(true)
+            }
             setText(initial)
             setSelection(initial.length)
         }
@@ -2362,7 +2369,16 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun onNoteDragStart() {
         barAnchor = null
         binding.selectionBar.visibility = View.GONE
+        // Read this page's text in the background, so later drags can also align with its lines.
+        val page = noteView?.pageIndex ?: return
+        val idx = searchIndex ?: return
+        if (!idx.isReady(page)) lifecycleScope.launch {
+            try { idx.ensurePage(page) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { }
+        }
     }
+
+    override fun guideBoxes(page: Int): List<RectF> =
+        searchIndexStore?.takeIf { it.isReady(page) }?.lineBoxes(page) ?: emptyList()
 
     override fun onNoteChanged(view: PdfPageView, page: Int, before: Any, after: Any) {
         history.addLast(page to NoteEdit(before, after))
@@ -2576,10 +2592,37 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val input = EditText(this).apply {
             setText(note.text)
             setSelection(note.text.length)
-            inputType = InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 2
+            maxLines = 8
         }
         root.addView(input)
+
+        // Paragraph alignment.
+        var align = note.align
+        val alignGroup = com.google.android.material.button.MaterialButtonToggleGroup(this).apply {
+            isSingleSelection = true
+            isSelectionRequired = true
+        }
+        val alignIds = IntArray(3)
+        listOf(R.drawable.ic_align_left, R.drawable.ic_align_center, R.drawable.ic_align_right).forEachIndexed { i, icon ->
+            val b = com.google.android.material.button.MaterialButton(
+                this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+            ).apply {
+                id = View.generateViewId()
+                setIconResource(icon)
+                iconPadding = 0
+                iconGravity = com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_START
+                contentDescription = getString(listOf(R.string.align_left, R.string.align_center, R.string.align_right)[i])
+            }
+            alignIds[i] = b.id
+            alignGroup.addView(b)
+        }
+        alignGroup.check(alignIds[align.coerceIn(0, 2)])
+        alignGroup.addOnButtonCheckedListener { _, id, checked -> if (checked) align = alignIds.indexOf(id).coerceAtLeast(0) }
+        root.addView(alignGroup, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = pad / 2 })
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2632,7 +2675,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 val list = pages[page]?.texts ?: return@setPositiveButton
                 val i = list.indexOf(note)
                 if (i < 0 || text.isEmpty()) return@setPositiveButton
-                val edited = TextNote(text, note.x, note.y, color, sizeOf(tenths))
+                val newSize = sizeOf(tenths)
+                // Keep the box width in proportion to the text size.
+                val width = if (note.width > 0f) note.width * newSize / note.size else 0f
+                val edited = note.copy(text = text, color = color, size = newSize, width = width, align = align)
                 list[i] = edited
                 history.addLast(page to NoteEdit(note, edited))
                 adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
