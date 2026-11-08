@@ -57,7 +57,7 @@ jobs:
           files: out/PDFWriter-v${{ steps.ver.outputs.name }}.apk
           make_latest: true
           body: |
-            ดาวน์โหลด **PDFWriter-v${{ steps.ver.outputs.name }}.apk** ด้านล่าง แล้วเปิดบนมือถือ/แท็บเล็ตเพื่อติดตั้ง
-            - นิ้ว = เลื่อนหน้า, S Pen = เขียน
-            - กดปุ่มข้างปากกาค้างไว้ = ยางลบ
-            - บันทึกอัตโนมัติ ปิดแอปได้เลย
+            Download **PDFWriter-v${{ steps.ver.outputs.name }}.apk** below and open it on your phone or tablet to install.
+            - Finger scrolls, S Pen writes
+            - Hold the S Pen side button to erase
+            - Saves automatically; just close the app

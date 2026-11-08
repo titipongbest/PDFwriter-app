@@ -1825,7 +1825,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun showModeMenu() {
         val popup = android.widget.PopupMenu(this, binding.btnMode)
         Mode.values().forEachIndexed { i, m ->
-            popup.menu.add(0, i, i, getString(m.description)).apply {
+            popup.menu.add(0, i, i, getString(m.label)).apply {
                 isCheckable = true
                 isChecked = m == currentMode
             }
