@@ -180,7 +180,7 @@
     <string name="erase_pixel">Pixel</string>
     <string name="already_open">Already open</string>
     <string name="print">Print</string>
-    <string name="print_failed">Couldn't prepare the document for printing</string>
+    <string name="print_failed">Couldn\'t prepare the document for printing</string>
     <string name="settings">Settings</string>
     <string name="set_ink_smoothing">Ink Smoothing</string>
     <string name="set_ink_smoothing_desc">When enabled, ink strokes are smoothed.</string>
