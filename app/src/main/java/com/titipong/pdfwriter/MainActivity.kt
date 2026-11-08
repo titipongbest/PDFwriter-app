@@ -1162,7 +1162,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                         finalCopy.delete()
                         rebuilt.renameTo(finalCopy)
                     }
-                    val doc = PdfDocumentRenderer.open(finalCopy, PdfDocumentRenderer.diskCacheFor(cacheDir, finalCopy))
+                    val doc = PdfDocumentRenderer.open(
+                        ParcelFileDescriptor.open(finalCopy, ParcelFileDescriptor.MODE_READ_ONLY),
+                        PdfDocumentRenderer.diskCacheFor(cacheDir, finalCopy)
+                    )
                     val toc = try { PdfAnnotationIO.read(finalCopy).outline } catch (e: Throwable) { emptyList() }
                     Pair(doc, toc)
                 }
@@ -1756,7 +1759,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Keep the copies of open tabs (and one whose save may still be running).
         dir.listFiles()?.forEach { if (it.name != copy.name && it.name !in keepFiles) it.delete() }
 
-        val doc = PdfDocumentRenderer.open(copy, PdfDocumentRenderer.diskCacheFor(cacheDir, copy))
+        val doc = PdfDocumentRenderer.open(
+            ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
+            PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
+        )
         val writable = canWrite(uri)
 
         if (fast && side != null) {
