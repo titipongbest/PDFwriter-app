@@ -263,6 +263,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             }
         })
         binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
+        binding.recycler.onSingleTap = { onPageSingleTap() }
         binding.btnOpenEmpty.setOnClickListener { launchPicker() }
         binding.tvCredit.text = getString(R.string.credit_line, appVersion())
 
@@ -1841,7 +1842,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun setInteraction(view: Boolean) {
-        binding.recycler.removeCallbacks(toggleChrome)
         if (!view && chromeHidden) setChromeHidden(false)
         interactionView = view
         prefs.edit().putBoolean(PREF_INTERACTION_VIEW, view).apply()
@@ -1940,12 +1940,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             h.rects.any { r -> nx >= r.left - padHit && nx <= r.right + padHit && ny >= r.top - padHit && ny <= r.bottom + padHit }
         } == true
         if (!onMarkup) {
-            if (hadPopup) return // the tap just dismissed the popup
-            // Wait to see if it's a double tap (zoom) before hiding / showing the menus.
-            if (binding.recycler.removeCallbacks(toggleChrome)) return
-            binding.recycler.postDelayed(toggleChrome, android.view.ViewConfiguration.getDoubleTapTimeout().toLong())
-            return
+            // A tap that only dismisses the popup shouldn't also hide the menus.
+            if (hadPopup) tapHandledAt = android.os.SystemClock.uptimeMillis()
+            return // otherwise onPageSingleTap() toggles the menus (after ruling out a double tap)
         }
+        tapHandledAt = android.os.SystemClock.uptimeMillis()
         val pad = 0.004f
         val hl = pages[page]?.highlights?.lastOrNull { h ->
             h.rects.any { r -> nx >= r.left - pad && nx <= r.right + pad && ny >= r.top - pad && ny <= r.bottom + pad }
@@ -2022,7 +2021,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // ---------------------------------------------------------------- view mode: tap to hide menus
 
     private var chromeHidden = false
-    private val toggleChrome = Runnable { setChromeHidden(!chromeHidden) }
+    /** When a tap was used for something else (opening / dismissing a popup), it doesn't toggle the menus. */
+    private var tapHandledAt = 0L
+
+    /** View mode: a single tap anywhere hides or shows the menus. */
+    private fun onPageSingleTap() {
+        if (!interactionView) return
+        if (android.os.SystemClock.uptimeMillis() - tapHandledAt < 700) return
+        setChromeHidden(!chromeHidden)
+    }
 
     /** Hides / shows the top bar, tabs, tool strip and the system bars (view mode, single tap). */
     private fun setChromeHidden(hidden: Boolean) {

@@ -34,6 +34,9 @@ class ZoomRecyclerView @JvmOverloads constructor(
     private var ty = 0f
     private val inverse = Matrix()
 
+    /** A confirmed single finger tap (not part of a double tap), anywhere on the list. */
+    var onSingleTap: (() -> Unit)? = null
+
     /** Called when a zoom gesture finishes, with the final scale. */
     var onZoomSettled: ((Float) -> Unit)? = null
 
@@ -83,6 +86,11 @@ class ZoomRecyclerView @JvmOverloads constructor(
     }).apply { isQuickScaleEnabled = false }
 
     private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            onSingleTap?.invoke()
+            return true
+        }
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
             zoomTo(if (scale > 1.05f) 1f else 2f, e.x, e.y)
             onZoomSettled?.invoke(scale)
