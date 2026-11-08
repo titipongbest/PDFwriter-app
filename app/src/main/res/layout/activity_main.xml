@@ -12,15 +12,29 @@
         android:layout_height="?attr/actionBarSize"
         android:background="#FFFFFF" />
 
-    <HorizontalScrollView
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/docTabs"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:background="#F1F5F9"
+        android:visibility="gone"
+        app:tabGravity="start"
+        app:tabIndicatorColor="#2563EB"
+        app:tabMinWidth="120dp"
+        app:tabMode="scrollable"
+        app:tabPaddingEnd="4dp"
+        app:tabPaddingStart="12dp" />
+
+    <!-- Fixed to the screen width (no sideways scrolling, so sliders drag freely) -->
+    <LinearLayout
         android:id="@+id/toolStrip"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#F8FAFC"
-        android:scrollbars="none">
+        android:orientation="vertical">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
@@ -44,7 +58,8 @@
             <!-- View mode: select text to copy / highlight -->
             <LinearLayout
                 android:id="@+id/viewTools"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
@@ -65,12 +80,20 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal" />
 
+                <View style="@style/ToolDivider" />
+
+                <ImageButton
+                    android:id="@+id/btnViewUndo"
+                    style="@style/ToolButton"
+                    android:contentDescription="@string/undo"
+                    android:src="@drawable/ic_undo" />
             </LinearLayout>
 
             <!-- Annotate mode: pens -->
             <LinearLayout
                 android:id="@+id/annotateTools"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
+                android:layout_weight="1"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
@@ -119,8 +142,15 @@
 
             <SeekBar
                 android:id="@+id/seekSize"
-                android:layout_width="160dp"
-                android:layout_height="wrap_content"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:maxWidth="360dp"
+                android:minWidth="120dp"
+                android:paddingStart="18dp"
+                android:paddingEnd="18dp"
+                android:splitTrack="false"
+                android:thumb="@drawable/seek_thumb"
                 android:contentDescription="@string/size" />
 
             <TextView
@@ -131,11 +161,15 @@
 
             <TextView
                 android:id="@+id/tvSize"
-                android:layout_width="40dp"
-                android:layout_height="wrap_content"
+                android:layout_width="52dp"
+                android:layout_height="36dp"
+                android:background="@drawable/size_box_bg"
+                android:clickable="true"
+                android:contentDescription="@string/size_type"
+                android:focusable="true"
                 android:gravity="center"
                 android:textColor="#111827"
-                android:textSize="14sp" />
+                android:textSize="15sp" />
 
             <View style="@style/ToolDivider" />
 
@@ -156,7 +190,7 @@
                 android:textColor="#16A34A"
                 android:textSize="12sp" />
         </LinearLayout>
-    </HorizontalScrollView>
+    </LinearLayout>
 
     <LinearLayout
         android:id="@+id/searchBar"

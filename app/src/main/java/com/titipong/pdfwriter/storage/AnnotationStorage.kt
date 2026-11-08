@@ -117,6 +117,31 @@ object AnnotationStorage {
         lastWritten[key] = seq
     }
 
+    /** The file's own table of contents, cached so a quick reopen doesn't need to parse the PDF. */
+    fun saveToc(context: Context, key: String, toc: List<com.titipong.pdfwriter.model.OutlineEntry>) {
+        val arr = JSONArray()
+        for (e in toc) arr.put(JSONObject().apply { put("t", e.title); put("p", e.page); put("d", e.depth) })
+        try {
+            File(fileFor(context, key).path.removeSuffix(".json") + ".toc.json").writeText(arr.toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    fun loadToc(context: Context, key: String): List<com.titipong.pdfwriter.model.OutlineEntry> = try {
+        val f = File(fileFor(context, key).path.removeSuffix(".json") + ".toc.json")
+        if (!f.exists()) {
+            emptyList()
+        } else {
+            val arr = JSONArray(f.readText())
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                com.titipong.pdfwriter.model.OutlineEntry(o.getString("t"), o.getInt("p"), o.getInt("d"))
+            }
+        }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
     fun load(context: Context, key: String): Loaded? {
         val result = mutableMapOf<Int, PageAnnotations>()
         val file = fileFor(context, key)

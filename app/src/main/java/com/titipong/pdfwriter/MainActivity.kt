@@ -82,15 +82,32 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     // Tools
     private var currentTool = DrawTool.PEN
-    private val palette = DEFAULT_COLORS.toMutableList()
-    private var colorIndex = 1
-    /** Pen size in tenths: 1..100 means 0.1..10.0 */
-    private var sizeTenths = 30
+
+    /** Each tool remembers its own colors, chosen color and size. Size in tenths: 1..100 = 0.1..10.0 */
+    private class ToolSetting(val palette: MutableList<Int>, var colorIndex: Int, var sizeTenths: Int)
+
+    private val toolSettings = mapOf(
+        DrawTool.PEN to ToolSetting(DEFAULT_COLORS.toMutableList(), 1, 30),
+        DrawTool.HIGHLIGHTER to ToolSetting(HIGHLIGHTER_INK_COLORS.toMutableList(), 0, 30),
+        DrawTool.TEXT to ToolSetting(DEFAULT_COLORS.toMutableList(), 0, 30),
+        DrawTool.ERASER to ToolSetting(mutableListOf(), 0, 40)
+    )
+    private val cur: ToolSetting get() = toolSettings.getValue(currentTool)
+    private val palette: MutableList<Int> get() = cur.palette
+    private var colorIndex: Int
+        get() = cur.colorIndex
+        set(value) { cur.colorIndex = value }
+    private var sizeTenths: Int
+        get() = cur.sizeTenths
+        set(value) { cur.sizeTenths = value }
     private val sizeValue: Float get() = sizeTenths / 10f
 
+    private fun widthFor(tenths: Int) = 0.0003f + 0.0012f * (tenths / 10f)
+
     override val tool: DrawTool get() = currentTool
-    override val color: Int get() = palette[colorIndex]
-    override val strokeWidth: Float get() = 0.0003f + 0.0012f * sizeValue
+    override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
+    override val strokeWidth: Float get() = widthFor(sizeTenths)
+    override val eraserWidth: Float get() = widthFor(toolSettings.getValue(DrawTool.ERASER).sizeTenths)
 
     // Current document
     private var document: PdfDocumentRenderer? = null
@@ -247,13 +264,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         setupTools()
         setupPanel()
 
+        loadTabs()
         val incoming = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data
         if (incoming != null) {
             openPdf(incoming, remember = persistPermission(incoming), silent = false)
         } else {
-            prefs.getString(PREF_LAST_URI, null)?.let {
-                openPdf(Uri.parse(it), remember = true, silent = true)
-            }
+            val last = prefs.getString(PREF_LAST_URI, null) ?: tabs.lastOrNull()?.uri
+            last?.let { openPdf(Uri.parse(it), remember = true, silent = true) }
         }
     }
 
@@ -266,6 +283,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun onPause() {
         super.onPause()
+        rememberPage()
         saveToolPrefs()
         saveNow()      // instant in-app copy
         writePdfNow()  // and into the PDF file, even if the app is being closed
@@ -354,22 +372,41 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // ================================================================ tools
 
     private fun loadToolPrefs() {
-        prefs.getString(PREF_PALETTE, null)?.split(',')?.mapNotNull { it.toIntOrNull() }?.let { saved ->
-            if (saved.size == DEFAULT_COLORS.size) {
-                palette.clear()
-                palette.addAll(saved)
+        for ((t, ts) in toolSettings) {
+            val k = "tool_${t.name}_"
+            // Pen falls back to the settings saved by older versions (one shared pen setting).
+            val paletteStr = prefs.getString(k + "palette", null)
+                ?: if (t == DrawTool.PEN) prefs.getString(PREF_PALETTE, null) else null
+            paletteStr?.split(',')?.mapNotNull { it.toIntOrNull() }?.let { saved ->
+                if (saved.size == ts.palette.size) {
+                    ts.palette.clear()
+                    ts.palette.addAll(saved)
+                }
             }
+            val idx = if (prefs.contains(k + "color")) prefs.getInt(k + "color", 0)
+            else if (t == DrawTool.PEN) prefs.getInt(PREF_COLOR_INDEX, ts.colorIndex) else ts.colorIndex
+            ts.colorIndex = if (ts.palette.isEmpty()) 0 else idx.coerceIn(0, ts.palette.size - 1)
+            val size = if (prefs.contains(k + "size")) prefs.getInt(k + "size", ts.sizeTenths)
+            else if (t == DrawTool.PEN) prefs.getInt(PREF_SIZE_TENTHS, ts.sizeTenths) else ts.sizeTenths
+            ts.sizeTenths = size.coerceIn(1, 100)
         }
-        colorIndex = prefs.getInt(PREF_COLOR_INDEX, 1).coerceIn(0, palette.size - 1)
-        sizeTenths = prefs.getInt(PREF_SIZE_TENTHS, 30).coerceIn(1, 100)
+        currentTool = try {
+            DrawTool.valueOf(prefs.getString(PREF_TOOL, DrawTool.PEN.name) ?: DrawTool.PEN.name)
+        } catch (e: IllegalArgumentException) {
+            DrawTool.PEN
+        }
     }
 
     private fun saveToolPrefs() {
-        prefs.edit()
-            .putString(PREF_PALETTE, palette.joinToString(","))
-            .putInt(PREF_COLOR_INDEX, colorIndex)
-            .putInt(PREF_SIZE_TENTHS, sizeTenths)
-            .apply()
+        val e = prefs.edit()
+        for ((t, ts) in toolSettings) {
+            val k = "tool_${t.name}_"
+            e.putString(k + "palette", ts.palette.joinToString(","))
+            e.putInt(k + "color", ts.colorIndex)
+            e.putInt(k + "size", ts.sizeTenths)
+        }
+        e.putString(PREF_TOOL, currentTool.name)
+        e.apply()
     }
 
     private fun setupTools() {
@@ -412,7 +449,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Colors: tap = use, tap the selected one again or long-press = edit.
         val dot = (28 * density).toInt()
         val gap = (6 * density).toInt()
-        palette.indices.forEach { i ->
+        DEFAULT_COLORS.indices.forEach { i ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
             v.contentDescription = getString(R.string.color)
@@ -440,31 +477,73 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         })
         binding.btnSizeMinus.setOnClickListener { stepSize(-1) }
         binding.btnSizePlus.setOnClickListener { stepSize(+1) }
-        showSize()
+        binding.tvSize.setOnClickListener { promptSize() }
+        binding.btnViewUndo.setOnClickListener { undoLast() }
 
-        selectTool(DrawTool.PEN)
-        selectColor(colorIndex)
+        selectTool(currentTool)
         setupModeToggle()
     }
 
     private fun stepSize(delta: Int) {
-        sizeTenths = (sizeTenths + delta).coerceIn(1, 100)
+        setSize(sizeTenths + delta)
+    }
+
+    private fun setSize(tenths: Int) {
+        sizeTenths = tenths.coerceIn(1, 100)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
+        saveToolPrefs()
+    }
+
+    /** Tap the size number to type an exact value. */
+    private fun promptSize() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(String.format(Locale.US, "%.1f", sizeValue))
+            setSelectAllOnFocus(true)
+        }
+        val pad = (20 * density).toInt()
+        val container = FrameLayout(this).apply {
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.size_dialog_title)
+            .setView(container)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val v = input.text.toString().replace(',', '.').toFloatOrNull()
+                if (v == null || v < 0.1f || v > 10f) {
+                    Toast.makeText(this, R.string.size_invalid, Toast.LENGTH_SHORT).show()
+                } else {
+                    setSize(Math.round(v * 10f))
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+        input.requestFocus()
     }
 
     private fun showSize() {
         binding.tvSize.text = String.format(Locale.US, "%.1f", sizeValue)
     }
 
+    /** Switches tool and shows that tool's own colors and size. */
     private fun selectTool(t: DrawTool) {
         currentTool = t
         toolButtons.forEach { (key, v) -> v.isSelected = key == t }
+        val hasColors = palette.isNotEmpty()
+        binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
+        if (hasColors) selectColor(colorIndex)
+        binding.seekSize.progress = sizeTenths - 1
+        showSize()
+        saveToolPrefs()
     }
 
     private fun selectColor(index: Int) {
         colorIndex = index
         colorViews.forEachIndexed { i, v ->
+            v.visibility = if (i < palette.size) View.VISIBLE else View.GONE
+            if (i >= palette.size) return@forEachIndexed
             v.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(palette[i])
@@ -961,6 +1040,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             dirty = false
             changeVersion++
             pdfSavedVersion = changeVersion
+            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let { prefs.edit().putString("meta_$key", it).apply() }
 
             // Swap the app over to the new layout.
             val finalCopy = File(dir, "$key.pdf")
@@ -1104,6 +1184,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 setStatus(R.string.save_pdf_failed)
                 return@launch
             }
+            // The file now matches our private copy + ink: a later reopen may reuse them.
+            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let { prefs.edit().putString("meta_$key", it).apply() }
             // Nothing changed meanwhile: mark the in-app copy as matching the file.
             if (changeVersion == version && docKey == key) {
                 val json = AnnotationStorage.toJson(snap, snapBookmarks, synced = true)
@@ -1332,7 +1414,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val bookmarks: MutableList<Bookmark>,
         val outline: List<OutlineEntry>,
         val writable: Boolean,
-        val needsPdfWrite: Boolean
+        val needsPdfWrite: Boolean,
+        /** Size/date of the source file when copied (null = the private copy was reused). */
+        val copiedMeta: String? = null,
+        val hadSidecar: Boolean = true
     )
 
     private fun openPdf(uri: Uri, remember: Boolean, silent: Boolean) {
@@ -1342,10 +1427,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             setStatus(R.string.loading)
             val name = queryName(uri)
             val key = AnnotationStorage.keyFor(uri.toString())
+            rememberPage()
+            val keep = tabs.map { AnnotationStorage.keyFor(it.uri) + ".pdf" }.toSet() +
+                listOfNotNull(localCopy?.name)
             val opened = try {
-                withContext(Dispatchers.IO) { loadDocument(uri, key) }
+                withContext(Dispatchers.IO) { loadDocument(uri, key, keep) }
             } catch (e: Exception) {
                 binding.tvSaveState.text = ""
+                // A tab whose file is gone or no longer accessible is removed.
+                tabs.removeAll { it.uri == uri.toString() }
+                saveTabs()
+                refreshTabs()
                 if (silent) {
                     prefs.edit().remove(PREF_LAST_URI).apply()
                 } else {
@@ -1372,7 +1464,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             readingTexts = null
             clearSearch(resetIndex = true)
             binding.emptyView.visibility = View.GONE
-            applyView(0)
+            opened.copiedMeta?.let { prefs.edit().putString("meta_$key", it).apply() }
+            if (!opened.hadSidecar) {
+                // So the next open of this file can skip parsing the PDF.
+                val json = AnnotationStorage.toJson(pages, bookmarks, synced = true)
+                val seq = ++saveSeq
+                withContext(Dispatchers.IO) {
+                    try { AnnotationStorage.save(applicationContext, key, json, seq) } catch (e: Exception) { }
+                }
+            }
+            addTab(uri, name)
+            applyView(prefs.getInt("page_$key", 0).coerceIn(0, (opened.doc.pageCount - 1).coerceAtLeast(0)))
             if (interactionView) prepareTextIndex()
             supportActionBar?.title = name
             setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
@@ -1392,44 +1494,221 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
     }
 
-    /** Runs on IO: copies the file privately, opens the renderer, and loads ink + bookmarks. */
-    private suspend fun loadDocument(uri: Uri, key: String): Opened {
+    /** Size and modification time of the source file, to tell whether it changed since we last saw it. */
+    private fun sourceMeta(uri: Uri): String? {
+        var size: Long? = null
+        var modified = 0L
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) size = c.getLong(0)
+            }
+        } catch (e: Exception) {
+        }
+        try {
+            contentResolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) modified = c.getLong(0)
+            }
+        } catch (e: Exception) {
+        }
+        return size?.let { "$it:$modified" }
+    }
+
+    /**
+     * Runs on IO: opens the renderer and loads ink + bookmarks.
+     * Fast path (switching tabs): if the file hasn't changed since this app last copied or saved it,
+     * the private copy and the app's saved ink are reused, so nothing is copied or parsed.
+     */
+    private suspend fun loadDocument(uri: Uri, key: String, keepFiles: Set<String>): Opened {
         val dir = File(filesDir, "docs").apply { mkdirs() }
         val copy = File(dir, "$key.pdf")
-        val tmp = File(dir, "$key.tmp")
-        val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open")
-        input.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
-        if (!tmp.renameTo(copy)) {
-            copy.delete()
-            tmp.renameTo(copy)
+        val meta = sourceMeta(uri)
+        val side = AnnotationStorage.load(applicationContext, key)
+        val fast = meta != null && side != null && copy.exists() && meta == prefs.getString("meta_$key", null)
+
+        if (!fast) {
+            val tmp = File(dir, "$key.tmp")
+            val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open")
+            input.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+            if (!tmp.renameTo(copy)) {
+                copy.delete()
+                tmp.renameTo(copy)
+            }
         }
-        // Keep only this copy and the previous one (a save for it may still be running).
-        val previous = localCopy?.name
-        dir.listFiles()?.forEach { if (it.name != copy.name && it.name != previous) it.delete() }
+        // Keep the copies of open tabs (and one whose save may still be running).
+        dir.listFiles()?.forEach { if (it.name != copy.name && it.name !in keepFiles) it.delete() }
 
         val doc = PdfDocumentRenderer.open(ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY))
         val writable = canWrite(uri)
-        val side = AnnotationStorage.load(applicationContext, key)
+
+        if (fast && side != null) {
+            return Opened(
+                doc, copy, side.pages, side.bookmarks, AnnotationStorage.loadToc(applicationContext, key),
+                writable, needsPdfWrite = !side.synced
+            )
+        }
+
         val fromPdf = try {
             PdfAnnotationIO.read(copy)
         } catch (e: Throwable) {
             null
         }
         val toc = fromPdf?.outline ?: emptyList()
+        AnnotationStorage.saveToc(applicationContext, key, toc)
 
         // The PDF library can't read this file: keep everything in the app only, never touch the file.
         if (fromPdf == null) {
             return Opened(
                 doc, copy, side?.pages ?: mutableMapOf(), side?.bookmarks ?: mutableListOf(), toc,
-                writable = false, needsPdfWrite = false
+                writable = false, needsPdfWrite = false, copiedMeta = meta, hadSidecar = true
             )
         }
         // The PDF file is the source of truth (it may have been edited in another app),
         // unless the app holds newer changes that never made it into the file.
         if (side != null && (!side.synced || !writable)) {
-            return Opened(doc, copy, side.pages, side.bookmarks, toc, writable, needsPdfWrite = !side.synced)
+            return Opened(
+                doc, copy, side.pages, side.bookmarks, toc, writable,
+                needsPdfWrite = !side.synced, copiedMeta = meta
+            )
         }
-        return Opened(doc, copy, fromPdf.pages, fromPdf.bookmarks, toc, writable, needsPdfWrite = false)
+        return Opened(
+            doc, copy, fromPdf.pages, fromPdf.bookmarks, toc, writable,
+            needsPdfWrite = false, copiedMeta = meta, hadSidecar = false
+        )
+    }
+
+    // ================================================================ document tabs
+
+    private class DocTab(val uri: String, var name: String)
+
+    private val tabs = mutableListOf<DocTab>()
+    private var suppressTabEvents = false
+
+    private fun loadTabs() {
+        tabs.clear()
+        try {
+            val arr = org.json.JSONArray(prefs.getString(PREF_TABS, "[]"))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                tabs.add(DocTab(o.getString("u"), o.optString("n")))
+            }
+        } catch (e: Exception) {
+        }
+        binding.docTabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                if (suppressTabEvents) return
+                val t = tabs.getOrNull(tab.position) ?: return
+                if (t.uri != docUri?.toString()) openPdf(Uri.parse(t.uri), remember = true, silent = false)
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {}
+        })
+        refreshTabs()
+    }
+
+    private fun saveTabs() {
+        val arr = org.json.JSONArray()
+        for (t in tabs) arr.put(org.json.JSONObject().apply { put("u", t.uri); put("n", t.name) })
+        prefs.edit().putString(PREF_TABS, arr.toString()).apply()
+    }
+
+    private fun addTab(uri: Uri, name: String) {
+        val u = uri.toString()
+        val existing = tabs.firstOrNull { it.uri == u }
+        if (existing != null) {
+            existing.name = name
+        } else {
+            tabs.add(DocTab(u, name))
+            while (tabs.size > MAX_TABS) tabs.removeAt(0)
+        }
+        saveTabs()
+        refreshTabs()
+    }
+
+    private fun refreshTabs() {
+        suppressTabEvents = true
+        val bar = binding.docTabs
+        bar.removeAllTabs()
+        val active = docUri?.toString()
+        for (t in tabs) {
+            val tab = bar.newTab()
+            tab.customView = tabView(t, t.uri == active)
+            bar.addTab(tab, t.uri == active)
+        }
+        bar.visibility = if (tabs.isEmpty()) View.GONE else View.VISIBLE
+        suppressTabEvents = false
+    }
+
+    private fun tabView(t: DocTab, active: Boolean): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        row.addView(android.widget.TextView(this).apply {
+            text = t.name.removeSuffix(".pdf")
+            maxWidth = (200 * density).toInt()
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            textSize = 13f
+            setTextColor(Color.parseColor(if (active) "#1D4ED8" else "#475569"))
+        })
+        row.addView(android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_close)
+            contentDescription = getString(R.string.close_tab)
+            val p = (6 * density).toInt()
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams((28 * density).toInt(), (28 * density).toInt())
+            setOnClickListener { closeTab(t) }
+        })
+        return row
+    }
+
+    private fun closeTab(t: DocTab) {
+        val index = tabs.indexOf(t)
+        if (index < 0) return
+        val wasActive = t.uri == docUri?.toString()
+        if (wasActive) rememberPage()
+        tabs.removeAt(index)
+        saveTabs()
+        if (wasActive) {
+            val next = tabs.getOrNull(index) ?: tabs.getOrNull(index - 1)
+            if (next != null) {
+                openPdf(Uri.parse(next.uri), remember = true, silent = false)
+            } else {
+                closeDocument()
+            }
+        }
+        refreshTabs()
+    }
+
+    /** Back to the empty screen (last tab closed). Ink is saved first. */
+    private fun closeDocument() {
+        saveNow()
+        writePdfNow()
+        clearSelection()
+        clearSearch(resetIndex = true)
+        document?.close()
+        document = null
+        adapter = null
+        binding.recycler.adapter = null
+        docUri = null
+        docKey = null
+        localCopy = null
+        pages = mutableMapOf()
+        bookmarks = mutableListOf()
+        outline = emptyList()
+        history.clear()
+        binding.emptyView.visibility = View.VISIBLE
+        supportActionBar?.title = getString(R.string.app_name)
+        supportActionBar?.subtitle = null
+        binding.tvSaveState.text = ""
+        prefs.edit().remove(PREF_LAST_URI).apply()
+    }
+
+    /** Remembers where the reader was in the current file. */
+    private fun rememberPage() {
+        val key = docKey ?: return
+        val page = currentPage()
+        if (page >= 0) prefs.edit().putInt("page_$key", page).apply()
     }
 
     private fun currentPage(): Int {
@@ -2119,6 +2398,20 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val SAMSUNG_PEN_DOWN = 211
         private const val SAMSUNG_PEN_UP = 212
         private const val SAMSUNG_PEN_MOVE = 213
+
+        private const val PREF_TOOL = "current_tool"
+        private const val PREF_TABS = "open_tabs"
+        private const val MAX_TABS = 12
+
+        /** Default highlighter-pen colors (light, see-through). */
+        private val HIGHLIGHTER_INK_COLORS = listOf(
+            Color.parseColor("#FACC15"),
+            Color.parseColor("#4ADE80"),
+            Color.parseColor("#60A5FA"),
+            Color.parseColor("#F472B6"),
+            Color.parseColor("#FB923C"),
+            Color.parseColor("#A78BFA")
+        )
 
         private val DEFAULT_COLORS = listOf(
             Color.parseColor("#111827"),

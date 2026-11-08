@@ -38,6 +38,8 @@ class PdfPageView(context: Context) : View(context) {
         val tool: DrawTool
         val color: Int
         val strokeWidth: Float
+        /** Eraser size (its own setting; also used for the S Pen side button). */
+        val eraserWidth: Float get() = strokeWidth
         fun annotationsFor(page: Int): PageAnnotations
         fun onItemAdded(page: Int, item: Any)
         fun onItemsErased(page: Int)
@@ -626,7 +628,7 @@ class PdfPageView(context: Context) : View(context) {
     private fun eraseAt(px: Float, py: Float, h: Host) {
         if (!toNormalized(px, py)) return
         val s = pageScale
-        eraserRadius = max(h.strokeWidth * s * 3f, minEraserPx)
+        eraserRadius = max(h.eraserWidth * s * 3f, minEraserPx)
         eraserX = px
         eraserY = py
         val a = annotations ?: return
