@@ -619,7 +619,7 @@ object PdfAnnotationIO {
             fun ux(i: Int) = geo.upX(pts[i].x)
             fun uy(i: Int) = geo.upY(pts[i].y)
             if (s.highlighter || pts.size == 1) {
-                cs.setLineCapStyle(if (s.highlighter) 2 else 1)
+                cs.setLineCapStyle(1) // round caps (pen and highlighter)
                 cs.setLineWidth(if (s.highlighter) basePt else basePt * PdfPageView.pressureScale(pts[0].pressure))
                 cs.moveTo(ux(0), uy(0))
                 if (pts.size == 1) cs.lineTo(ux(0) + 0.01f, uy(0))

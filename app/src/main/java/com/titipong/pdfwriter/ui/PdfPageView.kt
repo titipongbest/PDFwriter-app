@@ -419,7 +419,7 @@ class PdfPageView(context: Context) : View(context) {
         inkPaint.color = st.color
         if (st.highlighter) {
             inkPaint.alpha = 90
-            inkPaint.strokeCap = Paint.Cap.SQUARE
+            inkPaint.strokeCap = Paint.Cap.ROUND // rounded ends
             inkPaint.strokeWidth = st.width * s
             path.reset()
             path.moveTo(pts[0].x * s, pts[0].y * s)
