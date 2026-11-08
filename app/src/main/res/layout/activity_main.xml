@@ -170,33 +170,23 @@
             <View style="@style/ToolDivider" />
 
             <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:text="@string/size"
+                android:textColor="#374151"
+                android:textSize="14sp" />
+
+            <TextView
                 android:id="@+id/btnSizeMinus"
                 style="@style/StepButton"
                 android:contentDescription="@string/size_minus"
                 android:text="−" />
 
-            <SeekBar
-                android:id="@+id/seekSize"
-                android:layout_width="0dp"
-                android:layout_height="48dp"
-                android:layout_weight="1"
-                android:maxWidth="360dp"
-                android:minWidth="120dp"
-                android:paddingStart="18dp"
-                android:paddingEnd="18dp"
-                android:splitTrack="false"
-                android:thumb="@drawable/seek_thumb"
-                android:contentDescription="@string/size" />
-
-            <TextView
-                android:id="@+id/btnSizePlus"
-                style="@style/StepButton"
-                android:contentDescription="@string/size_plus"
-                android:text="+" />
-
             <TextView
                 android:id="@+id/tvSize"
                 android:layout_width="52dp"
+                android:layout_marginHorizontal="4dp"
                 android:layout_height="36dp"
                 android:background="@drawable/size_box_bg"
                 android:clickable="true"
@@ -205,6 +195,19 @@
                 android:gravity="center"
                 android:textColor="#111827"
                 android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/btnSizePlus"
+                style="@style/StepButton"
+                android:contentDescription="@string/size_plus"
+                android:text="+" />
+
+            <!-- Kept (hidden) so the size logic stays in one place; the size is set with -/+ or by typing. -->
+            <SeekBar
+                android:id="@+id/seekSize"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
 
             <View style="@style/ToolDivider" />
 
