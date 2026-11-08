@@ -27,6 +27,10 @@
         android:title="@string/view_mode"
         app:showAsAction="always" />
     <item
+        android:id="@+id/action_new"
+        android:title="@string/new_pdf"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_open"
         android:title="@string/open"
         app:showAsAction="ifRoom" />

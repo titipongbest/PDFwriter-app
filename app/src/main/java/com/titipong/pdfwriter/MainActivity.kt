@@ -218,6 +218,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (uri != null && at != null) placeImage(uri, at.first, at.second, at.third)
     }
 
+    /** "New": the paper chosen in the dialog, waiting for where to save the file. */
+    private var pendingNew: Pair<Boolean, com.titipong.pdfwriter.pdf.PageTemplate>? = null
+    private val createNewPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val spec = pendingNew
+        pendingNew = null
+        if (uri != null && spec != null) writeNewPdf(uri, spec.first, spec.second)
+    }
+
     private val pickPdf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) openPdf(uri, remember = persistPermission(uri), silent = false)
     }
@@ -380,6 +388,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         R.id.action_export -> {
             showExportDialog()
+            true
+        }
+        R.id.action_new -> {
+            com.titipong.pdfwriter.ui.NewPdfDialog.show(this, getString(R.string.new_default_name)) { name, landscape, template ->
+                pendingNew = landscape to template
+                createNewPdf.launch(if (name.endsWith(".pdf", true)) name else "$name.pdf")
+            }
             true
         }
         R.id.action_print -> {
@@ -1594,6 +1609,29 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun launchPicker() {
         pickPdf.launch(arrayOf("application/pdf"))
+    }
+
+    /** Writes the new blank PDF where the user chose, then opens it in a new tab. */
+    private fun writeNewPdf(uri: Uri, landscape: Boolean, template: com.titipong.pdfwriter.pdf.PageTemplate) {
+        lifecycleScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val tmp = File(cacheDir, "new.pdf")
+                    com.titipong.pdfwriter.pdf.PdfTemplates.create(tmp, template, landscape)
+                    contentResolver.openOutputStream(uri, "w")?.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+                        ?: throw IOException("Cannot write")
+                    tmp.delete()
+                    true
+                } catch (e: Throwable) {
+                    false
+                }
+            }
+            if (!ok) {
+                Toast.makeText(this@MainActivity, R.string.new_failed, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            openPdf(uri, remember = persistPermission(uri), silent = false)
+        }
     }
 
     private fun persistPermission(uri: Uri): Boolean {
