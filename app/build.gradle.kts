@@ -1,3 +1,5 @@
+import java.net.URL
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -66,7 +68,7 @@ val fetchTessdata by tasks.registering {
             val f = File(tessdataDir, "$l.traineddata")
             if (f.exists() && f.length() > 0) continue
             val tmp = File(tessdataDir, "$l.tmp")
-            java.net.URL("https://github.com/tesseract-ocr/tessdata_best/raw/main/$l.traineddata")
+            URL("https://github.com/tesseract-ocr/tessdata_best/raw/main/$l.traineddata")
                 .openStream().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
             check(tmp.length() > 1_000_000) { "Downloading $l.traineddata failed" }
             tmp.renameTo(f)
