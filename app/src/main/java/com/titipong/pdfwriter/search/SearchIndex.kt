@@ -6,8 +6,14 @@ import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.text.TextPosition
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReferenceArray
+import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -18,8 +24,67 @@ import kotlin.math.min
  *
  * Matching ignores whitespace and case, because Thai has no spaces between words and
  * OCR / PDF extraction inserts them inconsistently.
+ *
+ * Pages are read lazily, one at a time, on a low-priority thread: the page being read is prepared
+ * for text selection right away, and the whole document only when searching.
  */
-class SearchIndex private constructor(private val pages: List<PageText>) {
+class SearchIndex(private val file: File, private val pageCount: Int) {
+
+    private val texts = AtomicReferenceArray<PageText>(pageCount)
+    private val dispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "pdf-text").apply { priority = Thread.MIN_PRIORITY }
+    }.asCoroutineDispatcher()
+    private var doc: PDDocument? = null
+    private var stripper: PositionStripper? = null
+    @Volatile
+    private var closed = false
+
+    private val pages: List<PageText?>
+        get() = List(pageCount) { texts.get(it) }
+
+    fun isReady(page: Int): Boolean = page in 0 until pageCount && texts.get(page) != null
+    val allReady: Boolean get() = (0 until pageCount).all { texts.get(it) != null }
+
+    /** Reads the text of [page] if it hasn't been read yet. */
+    suspend fun ensurePage(page: Int) {
+        if (page !in 0 until pageCount || texts.get(page) != null || closed) return
+        withContext(dispatcher) { extract(page) }
+    }
+
+    /** Reads every page (for search), reporting progress. */
+    suspend fun ensureAll(onProgress: (Int, Int) -> Unit) {
+        for (p in 0 until pageCount) {
+            coroutineContext.ensureActive()
+            ensurePage(p)
+            if (p % 5 == 4 || p == pageCount - 1) onProgress(p + 1, pageCount)
+        }
+    }
+
+    private fun extract(page: Int) {
+        if (closed || texts.get(page) != null) return
+        val d = doc ?: PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).also { doc = it }
+        val st = stripper ?: PositionStripper().also { stripper = it }
+        val width = try { PageGeometry.of(d.getPage(page)).displayWidth } catch (e: Exception) { 1f }
+        st.reset(width)
+        st.startPage = page + 1
+        st.endPage = page + 1
+        try {
+            st.getText(d)
+        } catch (e: Exception) {
+            st.reset(width)
+        }
+        texts.set(page, st.result())
+    }
+
+    fun close() {
+        if (closed) return
+        closed = true
+        dispatcher.executor.execute {
+            try { doc?.close() } catch (e: Exception) { }
+            doc = null
+            dispatcher.close()
+        }
+    }
 
     /** [compact]: lowercase text without whitespace; [rects][i] is where compact[i] is on the page. */
     class PageText(
@@ -31,13 +96,14 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
 
     class Hit(val page: Int, val rects: List<RectF>, val snippet: String)
 
-    val isEmpty: Boolean get() = pages.all { it.compact.isEmpty() }
+    val isEmpty: Boolean get() = pages.all { it == null || it.compact.isEmpty() }
 
     fun find(query: String): List<Hit> {
         val q = normalize(query)
         if (q.isEmpty()) return emptyList()
         val hits = ArrayList<Hit>()
         pages.forEachIndexed { pageIndex, pt ->
+            if (pt == null) return@forEachIndexed
             var from = 0
             while (true) {
                 val at = pt.compact.indexOf(q, from)
@@ -53,14 +119,14 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
 
     // ------------------------------------------------------------ selection (view mode)
 
-    fun hasText(page: Int): Boolean = pages.getOrNull(page)?.compact?.isNotEmpty() == true
+    fun hasText(page: Int): Boolean = texts.getOrNull(page)?.compact?.isNotEmpty() == true
 
     /**
      * Index of the character at (or nearest to) a normalized point. With [maxDistance] > 0,
      * returns -1 when nothing is that close (e.g. a tap on blank margin).
      */
     fun charAt(page: Int, nx: Float, ny: Float, maxDistance: Float = 0f): Int {
-        val pt = pages.getOrNull(page) ?: return -1
+        val pt = texts.getOrNull(page) ?: return -1
         var best = -1
         var bestD = Float.MAX_VALUE
         pt.rects.forEachIndexed { i, r ->
@@ -79,7 +145,7 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
 
     /** The word around character [i]. Thai words are found with ICU's dictionary word breaker. */
     fun wordAt(page: Int, i: Int): IntRange {
-        val pt = pages.getOrNull(page) ?: return i..i
+        val pt = texts.getOrNull(page) ?: return i..i
         if (i !in pt.compact.indices) return i..i
         val disp = pt.compactToDisplay[i]
         val bi = java.text.BreakIterator.getWordInstance(Locale("th"))
@@ -97,7 +163,7 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
     }
 
     fun rangeRects(page: Int, from: Int, to: Int): List<RectF> {
-        val pt = pages.getOrNull(page) ?: return emptyList()
+        val pt = texts.getOrNull(page) ?: return emptyList()
         val a = min(from, to).coerceIn(0, pt.rects.size - 1)
         val b = max(from, to).coerceIn(0, pt.rects.size - 1)
         if (pt.rects.isEmpty()) return emptyList()
@@ -106,7 +172,7 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
 
     /** The selected text with its original spacing. */
     fun rangeText(page: Int, from: Int, to: Int): String {
-        val pt = pages.getOrNull(page) ?: return ""
+        val pt = texts.getOrNull(page) ?: return ""
         if (pt.compact.isEmpty()) return ""
         val a = min(from, to).coerceIn(0, pt.compact.length - 1)
         val b = max(from, to).coerceIn(0, pt.compact.length - 1)
@@ -146,31 +212,7 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
         fun normalize(s: String): String =
             s.lowercase(Locale.ROOT).filterNot { it.isWhitespace() }
 
-        fun build(file: File, onProgress: (Int, Int) -> Unit): SearchIndex {
-            PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
-                val total = doc.numberOfPages
-                val widths = FloatArray(total)
-                var i = 0
-                for (page in doc.pages) {
-                    widths[i++] = PageGeometry.of(page).displayWidth
-                }
-                val stripper = PositionStripper()
-                val out = ArrayList<PageText>(total)
-                for (p in 0 until total) {
-                    stripper.reset(widths[p])
-                    stripper.startPage = p + 1
-                    stripper.endPage = p + 1
-                    try {
-                        stripper.getText(doc)
-                    } catch (e: Exception) {
-                        stripper.reset(widths[p])
-                    }
-                    out.add(stripper.result())
-                    onProgress(p + 1, total)
-                }
-                return SearchIndex(out)
-            }
-        }
+        private fun <T> AtomicReferenceArray<T>.getOrNull(i: Int): T? = if (i in 0 until length()) get(i) else null
     }
 
     private class PositionStripper : PDFTextStripper() {

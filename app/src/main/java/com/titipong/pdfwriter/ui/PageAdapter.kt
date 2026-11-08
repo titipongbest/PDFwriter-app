@@ -41,6 +41,30 @@ class PageAdapter(
     /** Pages render at (page width on screen x renderScale) so zoomed pages stay sharp. */
     var renderScale = 1f
 
+    /** Renders the next pages ahead of time, so turning the page shows them at once. */
+    private var prefetchJob: Job? = null
+
+    init {
+        // A page whose real size differs from the estimate gets laid out again.
+        doc.onAspectChanged = { page -> notifyPage(page, ASPECT_PAYLOAD) }
+    }
+
+    private fun prefetchAfter(page: Int, width: Int) {
+        prefetchJob?.cancel()
+        prefetchJob = scope.launch {
+            kotlinx.coroutines.delay(120)
+            for (q in intArrayOf(page + 1, page + 2, page - 1)) {
+                if (q !in 0 until doc.pageCount || doc.isReady(q, width)) continue
+                try {
+                    doc.render(q, width)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                }
+            }
+        }
+    }
+
     fun positionOf(page: Int): Int = if (page in positionOfPage.indices) positionOfPage[page] else 0
     /** The page view showing [page], if it's on screen. */
     fun pageViewFor(rv: RecyclerView, page: Int): PdfPageView? {
@@ -82,6 +106,10 @@ class PageAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
         val s = spreads[position]
+        if (payloads.contains(ASPECT_PAYLOAD)) {
+            s.forEachIndexed { i, page -> holder.spread.pages[i].pageAspect = doc.aspects[page] }
+            if (payloads.all { it == ASPECT_PAYLOAD }) return
+        }
         if (payloads.contains(RERENDER_PAYLOAD)) {
             s.forEachIndexed { i, page ->
                 holder.spread.pages[i].invalidateInk()
@@ -152,7 +180,10 @@ class PageAdapter(
                         kotlinx.coroutines.delay(300L * attempt)
                     }
                 }
-                if (bmp != null && v.pageIndex == page) v.bitmap = bmp
+                if (bmp != null && v.pageIndex == page) {
+                    v.bitmap = bmp
+                    if (renderScale <= 1.01f) prefetchAfter(page, target)
+                }
             }
         }
     }
@@ -169,6 +200,7 @@ class PageAdapter(
         const val INK_PAYLOAD = "ink"
         const val RERENDER_PAYLOAD = "rerender"
         const val SEARCH_PAYLOAD = "search"
+        const val ASPECT_PAYLOAD = "aspect"
         private const val RENDER_ATTEMPTS = 5
 
         fun buildSpreads(count: Int, layout: PageLayout): List<IntArray> {

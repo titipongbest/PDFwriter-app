@@ -184,7 +184,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private var tappedHighlight: Pair<Int, TextHighlight>? = null
 
     // Search
-    private var searchIndex: SearchIndex? = null
+    private var searchIndexStore: SearchIndex? = null
+    /** Text of the open document, read lazily page by page (created on first use). */
+    private val searchIndex: SearchIndex?
+        get() {
+            searchIndexStore?.let { return it }
+            val file = localCopy ?: return null
+            val doc = document ?: return null
+            return SearchIndex(file, doc.pageCount).also { searchIndexStore = it }
+        }
+    private var textPrepJob: Job? = null
+    private var textPreparedAround = -1
     private var searchIndexJob: Job? = null
     private var searchDebounce: Job? = null
     private var hits: List<SearchIndex.Hit> = emptyList()
@@ -307,6 +317,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         super.onDestroy()
         document?.close()
         document = null
+        searchIndexStore?.close()
+        searchIndexStore = null
+        measureJob?.cancel()
     }
 
     /**
@@ -1167,6 +1180,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             }
             document?.close()
             document = opened.first
+            startMeasuring(opened.first)
             outline = opened.second
             localCopy = finalCopy
             pages = newPages
@@ -1623,6 +1637,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
             document?.close()
             document = opened.doc
+            startMeasuring(opened.doc)
             docUri = uri
             docName = name
             docKey = key
@@ -1896,6 +1911,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         clearSearch(resetIndex = true)
         document?.close()
         document = null
+        searchIndexStore?.close()
+        searchIndexStore = null
+        measureJob?.cancel()
         adapter = null
         binding.recycler.adapter = null
         docUri = null
@@ -2051,19 +2069,32 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     /** Text positions are needed to select text; build them in the background. */
-    private fun prepareTextIndex() {
-        if (document == null || searchIndex != null) return
-        binding.tvSaveState.setText(R.string.text_preparing)
-        buildIndexThen { setStatus(if (pdfWritable) R.string.saved_in_pdf else R.string.saved_in_app) }
+    /** Reads the text of the page being viewed (and its neighbours) so it can be selected at once. */
+    private fun prepareTextIndex(force: Boolean = false) {
+        val idx = searchIndex ?: return
+        val here = currentPage().coerceAtLeast(0)
+        if (!force && here == textPreparedAround) return
+        textPreparedAround = here
+        textPrepJob?.cancel()
+        textPrepJob = lifecycleScope.launch {
+            try {
+                for (p in intArrayOf(here, here + 1, here - 1, here + 2)) idx.ensurePage(p)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+            }
+        }
     }
 
     override val viewMode: Boolean get() = interactionView
 
     override fun selectBegin(view: PdfPageView, page: Int, nx: Float, ny: Float, byWord: Boolean): Boolean {
         clearSelection()
-        val idx = searchIndex
-        if (idx == null) {
-            prepareTextIndex()
+        val idx = searchIndex ?: return false
+        if (!idx.isReady(page)) {
+            lifecycleScope.launch {
+                try { idx.ensurePage(page) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { }
+            }
             Toast.makeText(this, R.string.text_preparing, Toast.LENGTH_SHORT).show()
             return false
         }
@@ -2414,7 +2445,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         hitIndex = -1
         if (resetIndex) {
             searchIndexJob?.cancel()
-            searchIndex = null
+            textPrepJob?.cancel()
+            textPreparedAround = -1
+            searchIndexStore?.close()
+            searchIndexStore = null
         }
         binding.searchCount.text = ""
         refreshHighlights()
@@ -2431,8 +2465,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             clearSearch(resetIndex = false)
             return
         }
-        val idx = searchIndex
-        if (idx == null) {
+        val idx = searchIndex ?: return
+        if (!idx.allReady) {
             buildIndexThen { runSearch(binding.searchInput.text.toString()) }
             return
         }
@@ -2462,26 +2496,27 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun buildIndexThen(after: () -> Unit) {
         if (searchIndexJob?.isActive == true) return
-        val src = localCopy ?: return
+        val idx = searchIndex ?: return
         searchIndexJob = lifecycleScope.launch {
-            val idx = try {
-                withContext(Dispatchers.IO) {
-                    SearchIndex.build(src) { done, total ->
-                        runOnUiThread {
-                            if (searchIndex == null) {
-                                binding.searchCount.text = getString(R.string.search_indexing, done, total)
-                            }
+            val ok = try {
+                idx.ensureAll { done, total ->
+                    runOnUiThread {
+                        if (searchIndexStore === idx && !idx.allReady) {
+                            binding.searchCount.text = getString(R.string.search_indexing, done, total)
                         }
                     }
                 }
+                true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Throwable) {
-                null
+                false
             }
-            if (idx == null) {
+            if (searchIndexStore !== idx) return@launch
+            if (!ok) {
                 binding.searchCount.setText(R.string.search_failed)
                 return@launch
             }
-            searchIndex = idx
             binding.searchCount.text = ""
             after()
         }
@@ -2702,6 +2737,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.recycler.post { updatePageIndicator() }
     }
 
+    private var measureJob: Job? = null
+
+    /** Measures the real size of every page in the background (after the first pages are shown). */
+    private fun startMeasuring(doc: PdfDocumentRenderer) {
+        measureJob?.cancel()
+        measureJob = lifecycleScope.launch {
+            kotlinx.coroutines.delay(1500)
+            try { doc.measureAll() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { }
+        }
+    }
+
     /** Finds each page's content area once per document, then re-applies the view. */
     private fun startCropDetection(doc: PdfDocumentRenderer, key: String) {
         if (cropJob?.isActive == true) return
@@ -2797,6 +2843,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (total > 0 && first >= 0) getString(R.string.page_of, first + 1, total) else null
         updateBookmarkButton()
         updateScrubber()
+        if (interactionView) prepareTextIndex()
     }
 
     companion object {
