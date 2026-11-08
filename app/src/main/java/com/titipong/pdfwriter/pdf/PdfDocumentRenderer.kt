@@ -146,11 +146,16 @@ class PdfDocumentRenderer private constructor(
 
     private val main = Handler(Looper.getMainLooper())
 
-    // Page images live in native memory; keep the cache modest so rendering more pages doesn't fail.
-    private val cache = object : LruCache<Int, Bitmap>(
-        (160L * 1024 * 1024).toInt()
-    ) {
+    // Sharp pages already shown stay in memory (native memory, sized to the device's RAM), so going
+    // back to them needs no loading at all. Shrinks when Android asks apps to free memory.
+    private val cache = object : LruCache<Int, Bitmap>(MEMORY_CACHE) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
+    }
+
+    /** Frees memory when the system runs low ([hard]: keep only a few pages). */
+    fun trimMemory(hard: Boolean) {
+        cache.trimToSize(if (hard) MEMORY_CACHE / 8 else MEMORY_CACHE / 2)
+        if (hard) previews.trimToSize(16 * 1024 * 1024)
     }
 
     /** Small copies of pages already seen, shown immediately while the sharp one loads. */
@@ -424,6 +429,18 @@ class PdfDocumentRenderer private constructor(
 
     companion object {
         const val MAX_WIDTH = 2800
+
+        /** About 1/12 of the device's RAM, 160–512 MB (e.g. 512 MB = ~60 sharp pages). */
+        private val MEMORY_CACHE: Int = run {
+            val total = try {
+                File("/proc/meminfo").useLines { lines ->
+                    lines.first { it.startsWith("MemTotal") }.filter { it.isDigit() }.toLong() * 1024
+                }
+            } catch (e: Throwable) {
+                0L
+            }
+            (total / 12).coerceIn(160L * 1024 * 1024, 512L * 1024 * 1024).toInt()
+        }
         private const val PREVIEW_WIDTH = 640
         /** An image this close to the wanted width is used as is (no re-render for a few pixels). */
         private const val FIT = 0.9f

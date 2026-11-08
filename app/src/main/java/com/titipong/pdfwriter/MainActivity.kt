@@ -313,6 +313,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         writePdfNow()  // and into the PDF file, even if the app is being closed
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val hard = level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL &&
+            level != android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) document?.trimMemory(hard)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         loadHandler.removeCallbacksAndMessages(null)
