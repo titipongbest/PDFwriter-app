@@ -18,40 +18,75 @@ import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 
+/** Which page a piece of render work is for, so the queue can put the page being read first. */
+private class PageKey(val page: Int) : AbstractCoroutineContextElement(PageKey) {
+    companion object : CoroutineContext.Key<PageKey>
+}
+
 /**
- * The one thread that touches the PdfRenderer, with two queues: pages on screen ([urgent]) always
- * go before background work (pre-rendering, measuring, cropping, OCR).
+ * The one thread that touches the PdfRenderer. Work is picked by priority, not arrival:
+ * 1. pages on screen, nearest to the page being read ([focus]) first;
+ * 2. background work for pages (pre-rendering), again nearest first;
+ * 3. other background work (measuring, cropping, OCR).
+ * The order is decided when the thread takes the next job, so scrolling re-prioritises at once.
  */
 private class RenderLanes {
+    private class Task(val r: Runnable, val urgent: Boolean, val page: Int)
+
     private val lock = Object()
-    private val high = ArrayDeque<Runnable>()
-    private val low = ArrayDeque<Runnable>()
+    private val tasks = ArrayList<Task>()
     private var stopped = false
 
+    /** The page being read. */
+    @Volatile
+    var focus = 0
+
     init {
-        Thread({ loop() }, "pdf-render").start()
+        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY + 1 }.start()
+    }
+
+    private fun rank(t: Task, focus: Int): Long {
+        val tier = when {
+            t.urgent && t.page < 0 -> 0L      // opening the document
+            t.urgent -> 1L
+            t.page >= 0 -> 2L
+            else -> 3L
+        }
+        val dist = if (t.page < 0) 0L else abs(t.page - focus).toLong()
+        return tier * 1_000_000L + dist
     }
 
     private fun loop() {
         while (true) {
             val r: Runnable = synchronized(lock) {
-                while (high.isEmpty() && low.isEmpty() && !stopped) lock.wait()
-                if (high.isEmpty() && low.isEmpty()) return
-                high.removeFirstOrNull() ?: low.removeFirst()
+                while (tasks.isEmpty() && !stopped) lock.wait()
+                if (tasks.isEmpty()) return
+                val f = focus
+                var best = 0
+                var bestRank = Long.MAX_VALUE
+                for (i in tasks.indices) {
+                    val k = rank(tasks[i], f)
+                    if (k < bestRank) {   // ties: the oldest wins
+                        bestRank = k
+                        best = i
+                    }
+                }
+                tasks.removeAt(best).r
             }
             try { r.run() } catch (t: Throwable) { }
         }
     }
 
-    fun post(r: Runnable, urgent: Boolean) {
+    fun post(r: Runnable, urgent: Boolean, page: Int = -1) {
         synchronized(lock) {
             if (!stopped) {
-                (if (urgent) high else low).addLast(r)
+                tasks.add(Task(r, urgent, page))
                 lock.notify()
                 return
             }
@@ -60,7 +95,7 @@ private class RenderLanes {
         Dispatchers.Default.dispatch(EmptyCoroutineContext, r)
     }
 
-    /** Stops the thread once the queues are empty. */
+    /** Stops the thread once the queue is empty. */
     fun stop() {
         synchronized(lock) {
             stopped = true
@@ -69,10 +104,12 @@ private class RenderLanes {
     }
 
     val urgent: CoroutineDispatcher = object : CoroutineDispatcher() {
-        override fun dispatch(context: CoroutineContext, block: Runnable) = post(block, true)
+        override fun dispatch(context: CoroutineContext, block: Runnable) =
+            post(block, true, context[PageKey]?.page ?: -1)
     }
     val background: CoroutineDispatcher = object : CoroutineDispatcher() {
-        override fun dispatch(context: CoroutineContext, block: Runnable) = post(block, false)
+        override fun dispatch(context: CoroutineContext, block: Runnable) =
+            post(block, false, context[PageKey]?.page ?: -1)
     }
 }
 
@@ -98,6 +135,11 @@ class PdfDocumentRenderer private constructor(
 
     @Volatile
     private var closed = false
+
+    /** The page being read: its rendering goes first, then the pages nearest to it. */
+    var focusPage: Int
+        get() = lanes.focus
+        set(value) { lanes.focus = value }
 
     /** Called on the main thread when a page turns out to have a different size than assumed. */
     var onAspectChanged: ((Int) -> Unit)? = null
@@ -193,7 +235,7 @@ class PdfDocumentRenderer private constructor(
      * A sharp-enough image already made (memory or disk), without rendering: shown first while a
      * sharper one (e.g. for zoom) is rendered. Null if there is none at [minWidth].
      */
-    suspend fun quick(index: Int, minWidth: Int): Bitmap? = withContext(lanes.urgent) {
+    suspend fun quick(index: Int, minWidth: Int): Bitmap? = withContext(lanes.urgent + PageKey(index)) {
         if (closed || index !in 0 until pageCount) return@withContext null
         val w = minWidth.coerceIn(300, MAX_WIDTH)
         val cached = cache.get(index)
@@ -205,7 +247,7 @@ class PdfDocumentRenderer private constructor(
     }
 
     suspend fun render(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? =
-        withContext(if (urgent) lanes.urgent else lanes.background) {
+        withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
         if (closed || index !in 0 until pageCount) return@withContext null
         val w = targetWidth.coerceIn(300, MAX_WIDTH)
         val cached = cache.get(index)

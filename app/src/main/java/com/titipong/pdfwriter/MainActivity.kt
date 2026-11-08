@@ -2836,9 +2836,20 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         readingAdapter?.textSize = viewSettings.readingTextSize
     }
 
+    /** The page in the middle of the screen (the one being read). */
+    private fun focusPage(): Int {
+        val rv = binding.recycler
+        val child = rv.findChildViewUnder(rv.width / 2f, rv.height / 2f)
+        val pos = child?.let { rv.getChildAdapterPosition(it) } ?: RecyclerView.NO_POSITION
+        if (pos == RecyclerView.NO_POSITION) return currentPage()
+        return adapter?.firstPageAt(pos)?.takeIf { it >= 0 } ?: currentPage()
+    }
+
     private fun updatePageIndicator() {
         val total = document?.pageCount ?: 0
         val first = currentPage()
+        // Render the page being read first, then the pages nearest to it.
+        document?.let { d -> focusPage().takeIf { it >= 0 }?.let { d.focusPage = it } }
         supportActionBar?.subtitle =
             if (total > 0 && first >= 0) getString(R.string.page_of, first + 1, total) else null
         updateBookmarkButton()
