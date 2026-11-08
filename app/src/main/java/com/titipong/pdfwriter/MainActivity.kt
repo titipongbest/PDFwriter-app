@@ -315,6 +315,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun onDestroy() {
         super.onDestroy()
+        loadHandler.removeCallbacksAndMessages(null)
         document?.close()
         document = null
         searchIndexStore?.close()
@@ -660,6 +661,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (barAnchor != null) binding.recycler.post { positionBar() }
         val a = adapter ?: return
         a.renderScale = scale
+        watchPageLoad()
         val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return
         val first = lm.findFirstVisibleItemPosition()
         val last = lm.findLastVisibleItemPosition()
@@ -2836,6 +2838,82 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         readingAdapter?.textSize = viewSettings.readingTextSize
     }
 
+    // ---------------------------------------------------------------- loading progress (top bar)
+
+    private val loadHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var loadPage = -1
+    private var loadStart = 0L
+    private var loadWasSharp = true
+    private val loadTick = Runnable { updateLoadProgress() }
+    private val loadHide = Runnable { binding.loadBox.visibility = View.GONE }
+
+    private fun watchPageLoad() {
+        loadHandler.removeCallbacks(loadTick)
+        loadHandler.post(loadTick)
+    }
+
+    /**
+     * Shows how far the page being read is from being sharp. The platform renderer reports no
+     * progress, so the bar follows the time this page (or pages like it) took to render before.
+     */
+    private fun updateLoadProgress() {
+        loadHandler.removeCallbacks(loadTick)
+        val doc = document
+        val a = adapter
+        if (doc == null || a == null || viewSettings.reading || binding.recycler.adapter !== a) {
+            loadHandler.removeCallbacks(loadHide)
+            binding.loadBox.visibility = View.GONE
+            return
+        }
+        val page = doc.focusPage
+        val now = android.os.SystemClock.uptimeMillis()
+        if (page != loadPage) {
+            loadPage = page
+            loadStart = now
+            loadWasSharp = false
+        }
+        val pv = a.pageViewFor(binding.recycler, page)
+        if (pv == null || pv.width == 0) {
+            loadHandler.postDelayed(loadTick, 100)
+            return
+        }
+        val target = (pv.renderWidth().coerceAtLeast(pv.width) * a.renderScale).toInt()
+            .coerceIn(300, PdfDocumentRenderer.MAX_WIDTH)
+        val bmp = pv.bitmap
+        val sharp = bmp != null && !bmp.isRecycled && bmp.width >= target * 0.88f
+        if (sharp) {
+            loadWasSharp = true
+            if (binding.loadBox.visibility == View.VISIBLE) {
+                binding.loadBar.setProgressCompat(100, true)
+                binding.loadPct.text = "100%"
+                loadHandler.removeCallbacks(loadHide)
+                loadHandler.postDelayed(loadHide, 300)
+            }
+            return
+        }
+        if (loadWasSharp) {
+            // Was sharp, now needs a sharper image (zoomed in): a new load starts.
+            loadWasSharp = false
+            loadStart = now
+        }
+        val elapsed = now - loadStart
+        if (elapsed < 150) {
+            // Fast loads (memory / saved image) don't flash a bar.
+            loadHandler.postDelayed(loadTick, 50)
+            return
+        }
+        val est = doc.estimateMs(page, target).coerceAtLeast(200L)
+        val pct = ((1.0 - Math.exp(-2.0 * elapsed / est)) * 95).toInt().coerceIn(1, 95)
+        loadHandler.removeCallbacks(loadHide)
+        if (binding.loadBox.visibility != View.VISIBLE) {
+            binding.loadBar.setProgressCompat(0, false)
+            binding.loadBox.visibility = View.VISIBLE
+        }
+        binding.loadBar.setProgressCompat(pct, true)
+        binding.loadPct.text = "$pct%"
+        loadHandler.postDelayed(loadTick, 80)
+    }
+
     /** The page in the middle of the screen (the one being read). */
     private fun focusPage(): Int {
         val rv = binding.recycler
@@ -2850,6 +2928,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val first = currentPage()
         // Render the page being read first, then the pages nearest to it.
         document?.let { d -> focusPage().takeIf { it >= 0 }?.let { d.focusPage = it } }
+        watchPageLoad()
         supportActionBar?.subtitle =
             if (total > 0 && first >= 0) getString(R.string.page_of, first + 1, total) else null
         updateBookmarkButton()

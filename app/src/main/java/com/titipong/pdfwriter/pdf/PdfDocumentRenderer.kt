@@ -136,6 +136,20 @@ class PdfDocumentRenderer private constructor(
     @Volatile
     private var closed = false
 
+    /** Rendering speed (ms per megapixel), overall and per page, to estimate loading progress. */
+    @Volatile
+    private var msPerMp = 150f
+    private val pageMsPerMp = FloatArray(aspects.size)
+
+    /** About how long rendering [index] at [width] takes, in ms. */
+    fun estimateMs(index: Int, width: Int): Long {
+        if (index !in 0 until pageCount) return 300
+        val w = width.coerceIn(300, MAX_WIDTH)
+        val mp = w.toFloat() * w * aspects[index] / 1_000_000f
+        val rate = pageMsPerMp[index].takeIf { it > 0f } ?: msPerMp
+        return (mp * rate + 80f).toLong()
+    }
+
     /** The page being read: its rendering goes first, then the pages nearest to it. */
     var focusPage: Int
         get() = lanes.focus
@@ -268,7 +282,11 @@ class PdfDocumentRenderer private constructor(
                 return@withContext null
             }
             bmp.eraseColor(Color.WHITE)
+            val t0 = android.os.SystemClock.uptimeMillis()
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            val rate = (android.os.SystemClock.uptimeMillis() - t0) / (w.toFloat() * h / 1_000_000f)
+            pageMsPerMp[index] = rate
+            msPerMp = msPerMp * 0.7f + rate * 0.3f
             cache.put(index, bmp)
             keepPreview(index, bmp)
             // Small thumbnails (page overview) aren't worth storing; keep the sharpest one on disk.
@@ -409,7 +427,7 @@ class PdfDocumentRenderer private constructor(
     }
 
     companion object {
-        private const val MAX_WIDTH = 2800
+        const val MAX_WIDTH = 2800
         private const val PREVIEW_WIDTH = 480
         /** An image this close to the wanted width is used as is (no re-render for a few pixels). */
         private const val FIT = 0.9f

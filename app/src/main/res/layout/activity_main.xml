@@ -23,6 +23,37 @@
             android:maxLines="1"
             android:textColor="#16A34A"
             android:textSize="12sp" />
+
+        <!-- Loading progress of the page being read, right after the file name -->
+        <LinearLayout
+            android:id="@+id/loadBox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/loadBar"
+                android:layout_width="64dp"
+                android:layout_height="wrap_content"
+                android:max="100"
+                app:indicatorColor="#2563EB"
+                app:trackColor="#DBEAFE"
+                app:trackCornerRadius="2dp"
+                app:trackThickness="4dp" />
+
+            <TextView
+                android:id="@+id/loadPct"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:maxLines="1"
+                android:textColor="#64748B"
+                android:textSize="11sp" />
+        </LinearLayout>
     </com.google.android.material.appbar.MaterialToolbar>
 
     <com.google.android.material.tabs.TabLayout
