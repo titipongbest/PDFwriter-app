@@ -132,7 +132,7 @@
     <string name="view_mode_hint">ลากด้วย S Pen หรือกดค้างด้วยนิ้ว เพื่อเลือกข้อความ</string>
     <string name="copy">คัดลอก</string>
     <string name="highlight">ไฮไลต์</string>
-    <string name="delete_highlight">ลบไฮไลต์</string>
+    <string name="delete_highlight">ลบ</string>
     <string name="copied">คัดลอกแล้ว</string>
     <string name="selection_chars">เลือก %1$d ตัวอักษร</string>
     <string name="text_preparing">กำลังเตรียมข้อความในเอกสาร…</string>
@@ -159,4 +159,11 @@
     <string name="extract_images_done_folder">บันทึก %1$d รูปในโฟลเดอร์ที่เลือกแล้ว</string>
     <string name="extract_failed">แยกหน้าไม่สำเร็จ</string>
     <string name="export_flat_done">บันทึกสำเนาแบบ Flatten แล้ว</string>
+    <string name="underline">ขีดเส้นใต้</string>
+    <string name="change_color">เปลี่ยนสี</string>
+    <string name="delete_markup">ลบ</string>
+    <string name="mode_pick_title">เลือกโหมด</string>
+    <string name="mode_view_desc">ดู · เลือก คัดลอก ไฮไลต์ ขีดเส้นใต้ข้อความ</string>
+    <string name="mode_annotate_desc">เขียน · ปากกา ไฮไลต์อิสระ ยางลบ ข้อความ</string>
+    <string name="markup_color_hint">แตะสีที่เลือกอยู่ หรือกดค้าง เพื่อแก้สี</string>
 </resources>

@@ -143,6 +143,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // View / annotate mode
     private var interactionView = false
     private var hlColorIndex = 0
+    /** Colors for text highlight / underline (view mode); editable. */
+    private val markupPalette = HIGHLIGHT_COLORS.toMutableList()
     private val hlColorViews = mutableListOf<View>()
     private var menuBookmark: MenuItem? = null
 
@@ -1445,31 +1447,65 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     // ================================================================ view / annotate mode
 
+    /** Interaction modes, listed in the mode picker. Add new modes here. */
+    private enum class Mode(val label: Int, val description: Int) {
+        VIEW(R.string.mode_view, R.string.mode_view_desc),
+        ANNOTATE(R.string.mode_annotate, R.string.mode_annotate_desc)
+    }
+
+    private val currentMode: Mode get() = if (interactionView) Mode.VIEW else Mode.ANNOTATE
+
     private fun setupModeToggle() {
         interactionView = prefs.getBoolean(PREF_INTERACTION_VIEW, false)
-        hlColorIndex = prefs.getInt(PREF_HL_COLOR, 0).coerceIn(0, HIGHLIGHT_COLORS.size - 1)
+        prefs.getString(PREF_HL_PALETTE, null)?.split(',')?.mapNotNull { it.toIntOrNull() }?.let { saved ->
+            if (saved.size == markupPalette.size) {
+                markupPalette.clear()
+                markupPalette.addAll(saved)
+            }
+        }
+        hlColorIndex = prefs.getInt(PREF_HL_COLOR, 0).coerceIn(0, markupPalette.size - 1)
 
         val dot = (28 * density).toInt()
         val gap = (6 * density).toInt()
-        HIGHLIGHT_COLORS.forEachIndexed { i, c ->
+        markupPalette.indices.forEach { i ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
-            v.contentDescription = getString(R.string.highlight_color)
-            v.setOnClickListener { selectHighlightColor(i) }
+            v.contentDescription = getString(R.string.color)
+            // Tap = use; tap the selected one again or long-press = edit it.
+            v.setOnClickListener { if (i == hlColorIndex) editMarkupColor(i) else selectHighlightColor(i) }
+            v.setOnLongClickListener {
+                editMarkupColor(i)
+                true
+            }
             binding.hlColorRow.addView(v)
             hlColorViews.add(v)
         }
         selectHighlightColor(hlColorIndex)
 
-        binding.modeToggle.check(if (interactionView) R.id.btnModeView else R.id.btnModeAnnotate)
-        binding.modeToggle.addOnButtonCheckedListener { _, id, checked ->
-            if (checked) setInteraction(view = id == R.id.btnModeView)
-        }
+        binding.btnMode.setOnClickListener { showModeMenu() }
         binding.btnSelCopy.setOnClickListener { copySelection() }
-        binding.btnSelHighlight.setOnClickListener { highlightSelection() }
+        binding.btnSelHighlight.setOnClickListener { markupSelection(underline = false) }
+        binding.btnSelUnderline.setOnClickListener { markupSelection(underline = true) }
+        binding.btnHlRecolor.setOnClickListener { recolorTappedMarkup() }
         binding.btnHlDelete.setOnClickListener { deleteTappedHighlight() }
         binding.btnSelClose.setOnClickListener { clearSelection() }
         showModeTools()
+    }
+
+    private fun showModeMenu() {
+        val popup = android.widget.PopupMenu(this, binding.btnMode)
+        Mode.values().forEachIndexed { i, m ->
+            popup.menu.add(0, i, i, getString(m.description)).apply {
+                isCheckable = true
+                isChecked = m == currentMode
+            }
+        }
+        popup.menu.setGroupCheckable(0, true, true)
+        popup.setOnMenuItemClickListener { item ->
+            setInteraction(view = Mode.values()[item.itemId] == Mode.VIEW)
+            true
+        }
+        popup.show()
     }
 
     private fun setInteraction(view: Boolean) {
@@ -1481,6 +1517,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun showModeTools() {
+        binding.btnMode.setText(currentMode.label)
         binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
         binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
     }
@@ -1491,10 +1528,18 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         hlColorViews.forEachIndexed { i, v ->
             v.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(HIGHLIGHT_COLORS[i])
+                setColor(markupPalette[i])
                 if (i == hlColorIndex) setStroke((3 * density).toInt(), Color.parseColor("#2563EB"))
                 else setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
             }
+        }
+    }
+
+    private fun editMarkupColor(index: Int) {
+        ColorPicker.show(this, markupPalette[index]) { picked ->
+            markupPalette[index] = picked
+            prefs.edit().putString(PREF_HL_PALETTE, markupPalette.joinToString(",")).apply()
+            selectHighlightColor(index)
         }
     }
 
@@ -1544,10 +1589,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun selectEnd(view: PdfPageView, page: Int) {
         if (selPage < 0) return
         val (a, b) = selectionRange()
-        val text = searchIndex?.rangeText(selPage, a, b) ?: ""
-        binding.selectionLabel.text = text.take(40).ifEmpty { getString(R.string.selection_chars, b - a + 1) }
         binding.btnSelCopy.visibility = View.VISIBLE
         binding.btnSelHighlight.visibility = View.VISIBLE
+        binding.btnSelUnderline.visibility = View.VISIBLE
+        binding.btnHlRecolor.visibility = View.GONE
         binding.btnHlDelete.visibility = View.GONE
         binding.selectionBar.visibility = View.VISIBLE
     }
@@ -1559,9 +1604,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             h.rects.any { r -> nx >= r.left - pad && nx <= r.right + pad && ny >= r.top - pad && ny <= r.bottom + pad }
         } ?: return
         tappedHighlight = page to hl
-        binding.selectionLabel.text = hl.text.take(40)
         binding.btnSelCopy.visibility = View.GONE
         binding.btnSelHighlight.visibility = View.GONE
+        binding.btnSelUnderline.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.VISIBLE
         binding.btnHlDelete.visibility = View.VISIBLE
         binding.selectionBar.visibility = View.VISIBLE
     }
@@ -1596,18 +1642,32 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         clearSelection()
     }
 
-    private fun highlightSelection() {
+    private fun markupSelection(underline: Boolean) {
         val idx = searchIndex ?: return
         val page = selPage
         if (page < 0) return
         val (a, b) = selectionRange()
         val rects = idx.rangeRects(page, a, b)
         if (rects.isEmpty()) return
-        val hl = TextHighlight(rects, HIGHLIGHT_COLORS[hlColorIndex], idx.rangeText(page, a, b))
+        val hl = TextHighlight(rects, markupPalette[hlColorIndex], idx.rangeText(page, a, b), underline)
         annotationsFor(page).highlights.add(hl)
         clearSelection()
         adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
         onItemAdded(page, hl)
+    }
+
+    /** Pick any color for a highlight / underline that's already on the page. */
+    private fun recolorTappedMarkup() {
+        val (page, hl) = tappedHighlight ?: return
+        ColorPicker.show(this, hl.color) { picked ->
+            val list = pages[page]?.highlights ?: return@show
+            val i = list.indexOf(hl)
+            if (i < 0) return@show
+            list[i] = hl.withColor(picked)
+            clearSelection()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+        }
     }
 
     private fun deleteTappedHighlight() {
@@ -2046,6 +2106,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val OCR_WIDTH = 2000
         private const val PREF_INTERACTION_VIEW = "interaction_view"
         private const val PREF_HL_COLOR = "highlight_color"
+        private const val PREF_HL_PALETTE = "highlight_palette"
 
         /** Text-highlighter colors (view mode). */
         private val HIGHLIGHT_COLORS = listOf(

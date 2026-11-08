@@ -29,8 +29,12 @@ class TextNote(
 class TextHighlight(
     val rects: List<android.graphics.RectF>,
     val color: Int,
-    val text: String
-)
+    val text: String,
+    /** true = underline (PDF /Underline), false = highlight (PDF /Highlight). */
+    val underline: Boolean = false
+) {
+    fun withColor(c: Int) = TextHighlight(rects, c, text, underline)
+}
 
 class PageAnnotations {
     val strokes: MutableList<InkStroke> = mutableListOf()

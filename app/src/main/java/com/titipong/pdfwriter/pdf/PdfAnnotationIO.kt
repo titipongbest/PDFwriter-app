@@ -64,6 +64,7 @@ object PdfAnnotationIO {
     private val INK = COSName.getPDFName("Ink")
     private val FREE_TEXT = COSName.getPDFName("FreeText")
     private val HIGHLIGHT = COSName.getPDFName("Highlight")
+    private val UNDERLINE = COSName.getPDFName("Underline")
     private val QUAD_POINTS = COSName.getPDFName("QuadPoints")
     private val INK_LIST = COSName.getPDFName("InkList")
     private val BORDER = COSName.getPDFName("Border")
@@ -81,6 +82,7 @@ object PdfAnnotationIO {
     private val PARENT = COSName.getPDFName("Parent")
 
     private const val HIGHLIGHT_ALPHA = 0.35f
+    const val UNDERLINE_RATIO = 0.09f
     private val writeLock = Mutex()
 
     // ------------------------------------------------------------------ read
@@ -109,7 +111,8 @@ object PdfAnnotationIO {
                     when (d.getDictionaryObject(COSName.SUBTYPE)) {
                         INK -> parseInk(d, geo)?.let { pa.strokes.addAll(it) }
                         FREE_TEXT -> parseText(d)?.let { pa.texts.add(it) }
-                        HIGHLIGHT -> parseHighlight(d, geo)?.let { pa.highlights.add(it) }
+                        HIGHLIGHT -> parseHighlight(d, geo, underline = false)?.let { pa.highlights.add(it) }
+                        UNDERLINE -> parseHighlight(d, geo, underline = true)?.let { pa.highlights.add(it) }
                     }
                 }
                 if (!pa.isEmpty()) result[index] = pa
@@ -209,7 +212,7 @@ object PdfAnnotationIO {
     }
 
     /** Any app's /Highlight: one box per quad (8 numbers), in display coordinates. */
-    private fun parseHighlight(d: COSDictionary, geo: PageGeometry): TextHighlight? = try {
+    private fun parseHighlight(d: COSDictionary, geo: PageGeometry, underline: Boolean): TextHighlight? = try {
         val q = d.getDictionaryObject(QUAD_POINTS) as? COSArray
         if (q == null || q.size() < 8 || geo.displayWidth <= 0f) {
             null
@@ -229,7 +232,9 @@ object PdfAnnotationIO {
                 i += 8
             }
             if (rects.isEmpty()) null
-            else TextHighlight(rects, readColor(d.getDictionaryObject(COSName.C) as? COSArray), d.getString(COSName.CONTENTS) ?: "")
+            else TextHighlight(
+                rects, readColor(d.getDictionaryObject(COSName.C) as? COSArray), d.getString(COSName.CONTENTS) ?: "", underline
+            )
         }
     } catch (e: Exception) {
         null
@@ -271,7 +276,8 @@ object PdfAnnotationIO {
         return when (d.getDictionaryObject(COSName.SUBTYPE)) {
             INK -> parseInk(d, geo) != null // unreadable ink is left untouched
             FREE_TEXT -> d.getBoolean(PW_TEXT, false)
-            HIGHLIGHT -> parseHighlight(d, geo) != null // unreadable highlights are left untouched
+            HIGHLIGHT -> parseHighlight(d, geo, false) != null // unreadable markup is left untouched
+            UNDERLINE -> parseHighlight(d, geo, true) != null
             else -> false
         }
     }
@@ -660,7 +666,7 @@ object PdfAnnotationIO {
             }
         }
         val rect = PDRectangle(minX - 1f, minY - 1f, (maxX - minX) + 2f, (maxY - minY) + 2f)
-        val d = baseDict(HIGHLIGHT, rect)
+        val d = baseDict(if (h.underline) UNDERLINE else HIGHLIGHT, rect)
         d.setItem(QUAD_POINTS, quads)
         d.setItem(COSName.C, colorArray(h.color))
         d.setFloat(COSName.CA, 1f)
@@ -672,16 +678,26 @@ object PdfAnnotationIO {
         ap.resources = PDResources()
         PDPageContentStream(doc, ap).use { cs ->
             cs.transform(geo.displayUpMatrix())
-            val gs = PDExtendedGraphicsState()
-            gs.blendMode = BlendMode.MULTIPLY // text under the highlight stays readable
-            cs.setGraphicsStateParameters(gs)
             val c = rgb(h.color)
             cs.setNonStrokingColor(c[0], c[1], c[2])
-            for (r in h.rects) {
-                val x = geo.upX(r.left)
-                val yTop = geo.upY(r.top)
-                val yBottom = geo.upY(r.bottom)
-                cs.addRect(x, yBottom, geo.upX(r.right) - x, yTop - yBottom)
+            if (h.underline) {
+                // A bar along the bottom of each line box.
+                for (r in h.rects) {
+                    val x = geo.upX(r.left)
+                    val yBottom = geo.upY(r.bottom)
+                    val thick = max((geo.upY(r.top) - yBottom) * UNDERLINE_RATIO, 0.6f)
+                    cs.addRect(x, yBottom, geo.upX(r.right) - x, thick)
+                }
+            } else {
+                val gs = PDExtendedGraphicsState()
+                gs.blendMode = BlendMode.MULTIPLY // text under the highlight stays readable
+                cs.setGraphicsStateParameters(gs)
+                for (r in h.rects) {
+                    val x = geo.upX(r.left)
+                    val yTop = geo.upY(r.top)
+                    val yBottom = geo.upY(r.bottom)
+                    cs.addRect(x, yBottom, geo.upX(r.right) - x, yTop - yBottom)
+                }
             }
             cs.fill()
         }

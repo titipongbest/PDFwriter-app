@@ -78,6 +78,7 @@ object AnnotationStorage {
                     put("c", h.color)
                     put("t", h.text)
                     put("r", r)
+                    put("u", h.underline)
                 })
             }
             val po = JSONObject()
@@ -179,7 +180,7 @@ object AnnotationStorage {
                         )
                         j += 4
                     }
-                    if (rects.isNotEmpty()) page.highlights.add(TextHighlight(rects, ho.getInt("c"), ho.optString("t")))
+                    if (rects.isNotEmpty()) page.highlights.add(TextHighlight(rects, ho.getInt("c"), ho.optString("t"), ho.optBoolean("u")))
                 }
                 result[k.toInt()] = page
             }

@@ -27,27 +27,17 @@
             android:paddingHorizontal="8dp"
             android:paddingVertical="6dp">
 
-            <com.google.android.material.button.MaterialButtonToggleGroup
-                android:id="@+id/modeToggle"
+            <!-- Mode picker: tap for a list of modes (room for more later) -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnMode"
+                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                app:selectionRequired="true"
-                app:singleSelection="true">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnModeView"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/mode_view" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnModeAnnotate"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/mode_annotate" />
-            </com.google.android.material.button.MaterialButtonToggleGroup>
+                android:minWidth="0dp"
+                android:text="@string/mode_annotate"
+                app:icon="@drawable/ic_chevron_down"
+                app:iconGravity="textEnd"
+                app:iconTint="#374151" />
 
             <View style="@style/ToolDivider" />
 
@@ -64,7 +54,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="12dp"
-                    android:text="@string/highlight_color"
+                    android:text="@string/color"
                     android:textColor="#374151"
                     android:textSize="14sp" />
 
@@ -75,14 +65,6 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal" />
 
-                <View style="@style/ToolDivider" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/view_mode_hint"
-                    android:textColor="#6B7280"
-                    android:textSize="13sp" />
             </LinearLayout>
 
             <!-- Annotate mode: pens -->
@@ -306,17 +288,6 @@
             android:paddingHorizontal="8dp"
             android:visibility="gone">
 
-            <TextView
-                android:id="@+id/selectionLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="8dp"
-                android:maxWidth="260dp"
-                android:maxLines="1"
-                android:ellipsize="end"
-                android:textColor="#374151"
-                android:textSize="13sp" />
-
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSelCopy"
                 style="@style/Widget.Material3.Button.TextButton"
@@ -330,6 +301,20 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/highlight" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSelUnderline"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/underline" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHlRecolor"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/change_color" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnHlDelete"

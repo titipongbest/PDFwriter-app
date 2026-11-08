@@ -291,9 +291,16 @@ class PdfPageView(context: Context) : View(context) {
         }
         annotations?.highlights?.forEach { hl ->
             highlightPaint.color = hl.color
-            highlightPaint.alpha = 115
             highlightPaint.colorFilter = lk.inkFilter
-            for (r in hl.rects) canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, highlightPaint)
+            if (hl.underline) {
+                for (r in hl.rects) {
+                    val thick = max(r.height() * com.titipong.pdfwriter.pdf.PdfAnnotationIO.UNDERLINE_RATIO * s, 1.5f)
+                    canvas.drawRect(r.left * s, r.bottom * s - thick, r.right * s, r.bottom * s, highlightPaint)
+                }
+            } else {
+                highlightPaint.alpha = 115
+                for (r in hl.rects) canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, highlightPaint)
+            }
         }
         selectionRects?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, selectionPaint) }
         hits?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, hitPaint) }
