@@ -51,7 +51,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:maxLines="1"
-                android:text="@string/page_loading"
                 android:textColor="#64748B"
                 android:textSize="11sp" />
         </LinearLayout>

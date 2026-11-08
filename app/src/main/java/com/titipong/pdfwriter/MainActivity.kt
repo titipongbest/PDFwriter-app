@@ -2894,6 +2894,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Fast loads (memory / saved image) don't flash the indicator.
         if (now - loadStart >= 150) {
             loadHandler.removeCallbacks(loadHide)
+            binding.loadPct.text = getString(R.string.page_loading, page + 1)
             binding.loadBox.visibility = View.VISIBLE
         }
         loadHandler.postDelayed(loadTick, 80)
