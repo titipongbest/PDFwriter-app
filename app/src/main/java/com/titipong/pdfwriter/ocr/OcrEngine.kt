@@ -64,7 +64,7 @@ class OcrEngine(context: Context) : Closeable {
                 val marksOnly = w.text.all { Character.getType(it) == Character.NON_SPACING_MARK.toInt() }
                 val sameLine = overlapY(prev.box, w.box) > 0.4f * minOf(prev.box.height(), w.box.height())
                 val h = maxOf(prev.box.height(), w.box.height())
-                val touching = w.box.left - prev.box.right < 0.35f * h
+                val touching = w.box.left - prev.box.right < 0.18f * h
                 if (marksOnly || (sameLine && touching && isThai(prev.text.last()) && isThai(w.text.first()))) {
                     val box = RectF(prev.box).apply { union(w.box) }
                     out[out.size - 1] = Word(prev.text + w.text, box)
