@@ -151,6 +151,7 @@ class PageAdapter(
             v.activeHits = host.activeSearchHit(page)
             // Show what's already loaded right away (no blank page), then sharpen.
             v.bitmap = doc.peek(page)
+            com.titipong.pdfwriter.Perf.log("bind p=$page shown=${v.bitmap?.width ?: 0}")
             render(holder, i, page)
         }
     }
@@ -163,13 +164,16 @@ class PageAdapter(
             if (v.pageIndex != page) return@doOnLayout
             holder.jobs[slot]?.cancel()
             holder.jobs[slot] = scope.launch {
+                val t0 = com.titipong.pdfwriter.Perf.now()
                 val base = v.renderWidth().coerceAtLeast(v.width)
                 val target = (base * renderScale).toInt()
+                com.titipong.pdfwriter.Perf.log("start p=$page base=$base target=$target shown=${v.bitmap?.width ?: 0}")
                 // First show a sharp image already made (memory / disk) if the one on screen is only
                 // a small preview, then render a sharper one if zoomed in.
                 val shown = v.bitmap
                 if (shown == null || shown.width < base * 0.9f) {
                     val quick = try { doc.quick(page, base) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { null }
+                    com.titipong.pdfwriter.Perf.log("quick p=$page ${if (quick != null) "hit w=${quick.width}" else "miss"} ${com.titipong.pdfwriter.Perf.now() - t0}ms")
                     if (quick != null && v.pageIndex == page) {
                         v.bitmap = quick
                         if (quick.width >= target * 0.9f) {
@@ -199,6 +203,7 @@ class PageAdapter(
                 }
                 if (bmp != null && v.pageIndex == page) {
                     v.bitmap = bmp
+                    com.titipong.pdfwriter.Perf.log("sharp p=$page w=${bmp.width} total=${com.titipong.pdfwriter.Perf.now() - t0}ms")
                     prefetchAfter(page, target)
                 }
             }
@@ -206,6 +211,7 @@ class PageAdapter(
     }
 
     override fun onViewRecycled(holder: Holder) {
+        com.titipong.pdfwriter.Perf.log("recycle p=${holder.spread.pages[0].pageIndex}")
         holder.jobs.forEachIndexed { i, job ->
             job?.cancel()
             holder.jobs[i] = null

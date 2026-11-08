@@ -210,9 +210,13 @@ class PdfDocumentRenderer private constructor(
             try {
                 f.parentFile?.mkdirs()
                 val tmp = File(f.path + ".tmp")
+                val s0 = com.titipong.pdfwriter.Perf.now()
                 tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
                 if (!tmp.renameTo(f)) tmp.delete()
-            } catch (e: Throwable) { }
+                com.titipong.pdfwriter.Perf.log("saved p=$index ${f.length() / 1024}KB ${com.titipong.pdfwriter.Perf.now() - s0}ms")
+            } catch (e: Throwable) {
+                com.titipong.pdfwriter.Perf.log("save-failed p=$index $e")
+            }
         }
     }
 
@@ -257,7 +261,10 @@ class PdfDocumentRenderer private constructor(
         if (closed || index !in 0 until pageCount) return null
         val want = targetWidth.coerceIn(300, MAX_WIDTH)
         cache.get(index)?.let { if (it.width >= want * FIT) return it }
-        withContext(Dispatchers.IO) { loadFromDisk(index, want) }?.let {
+        val d0 = com.titipong.pdfwriter.Perf.now()
+        withContext(Dispatchers.IO) { loadFromDisk(index, want) }.also {
+            com.titipong.pdfwriter.Perf.log("disk p=$index ${if (it != null) "hit" else "miss"} ${com.titipong.pdfwriter.Perf.now() - d0}ms")
+        }?.let {
             cache.put(index, it)
             keepPreview(index, it)
             return it
@@ -265,9 +272,11 @@ class PdfDocumentRenderer private constructor(
         return renderQueued(index, targetWidth, urgent)
     }
 
-    private suspend fun renderQueued(index: Int, targetWidth: Int, urgent: Boolean): Bitmap? =
-        withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
+    private suspend fun renderQueued(index: Int, targetWidth: Int, urgent: Boolean): Bitmap? {
+        val q = com.titipong.pdfwriter.Perf.now()
+        return withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
         if (closed || index !in 0 until pageCount) return@withContext null
+        com.titipong.pdfwriter.Perf.log("engine-begin p=$index urgent=$urgent waited=${com.titipong.pdfwriter.Perf.now() - q}ms focus=${lanes.focus}")
         val w = targetWidth.coerceIn(300, MAX_WIDTH)
         val cached = cache.get(index)
         if (cached != null && cached.width >= w * FIT) return@withContext cached
@@ -287,7 +296,9 @@ class PdfDocumentRenderer private constructor(
                 return@withContext null
             }
             bmp.eraseColor(Color.WHITE)
+            val r0 = com.titipong.pdfwriter.Perf.now()
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            com.titipong.pdfwriter.Perf.log("engine-done p=$index w=$w render=${com.titipong.pdfwriter.Perf.now() - r0}ms")
             cache.put(index, bmp)
             keepPreview(index, bmp)
             // Small thumbnails (page overview) aren't worth storing; keep the sharpest one on disk.
@@ -295,6 +306,7 @@ class PdfDocumentRenderer private constructor(
             bmp
         } finally {
             page.close()
+        }
         }
     }
 
