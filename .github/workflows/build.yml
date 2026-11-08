@@ -29,21 +29,22 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug assembleRelease --stacktrace
 
+      - name: Read version
+        id: ver
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+
+      # Version in the file name, so downloads of different builds can't be mixed up.
       - name: Rename APKs
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/debug/app-debug.apk out/PDFWriter-debug.apk
-          cp app/build/outputs/apk/release/app-release.apk out/PDFWriter.apk
+          cp app/build/outputs/apk/debug/app-debug.apk out/PDFWriter-v${{ steps.ver.outputs.name }}-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk out/PDFWriter-v${{ steps.ver.outputs.name }}.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: PDFWriter-apk
           path: out/*.apk
           retention-days: 30
-
-      - name: Read version
-        id: ver
-        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
 
       # Every push to main publishes/updates the release for the current versionName.
       - name: Publish GitHub Release
@@ -53,10 +54,10 @@ jobs:
           tag_name: v${{ steps.ver.outputs.name }}
           name: PDFWriter v${{ steps.ver.outputs.name }}
           target_commitish: ${{ github.sha }}
-          files: out/PDFWriter.apk
+          files: out/PDFWriter-v${{ steps.ver.outputs.name }}.apk
           make_latest: true
           body: |
-            ดาวน์โหลด **PDFWriter.apk** ด้านล่าง แล้วเปิดบนมือถือ/แท็บเล็ตเพื่อติดตั้ง
+            ดาวน์โหลด **PDFWriter-v${{ steps.ver.outputs.name }}.apk** ด้านล่าง แล้วเปิดบนมือถือ/แท็บเล็ตเพื่อติดตั้ง
             - นิ้ว = เลื่อนหน้า, S Pen = เขียน
             - กดปุ่มข้างปากกาค้างไว้ = ยางลบ
             - บันทึกอัตโนมัติ ปิดแอปได้เลย
