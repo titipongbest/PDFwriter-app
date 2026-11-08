@@ -126,4 +126,15 @@
     <string name="ocr_failed">บันทึกผล OCR ไม่สำเร็จ ไฟล์เดิมไม่ถูกแก้ไข</string>
     <string name="ocr_read_only_msg">ไฟล์นี้เขียนทับไม่ได้ บันทึกผล OCR เป็นไฟล์ PDF ใหม่แล้วเปิดไฟล์นั้นต่อไหม</string>
     <string name="ocr_note">ข้อความจาก OCR ถูกฝังแบบมองไม่เห็นในไฟล์ หน้าตาเอกสารไม่เปลี่ยน</string>
+    <string name="mode_view">ดู</string>
+    <string name="mode_annotate">เขียน</string>
+    <string name="highlight_color">สีไฮไลต์</string>
+    <string name="view_mode_hint">ลากด้วย S Pen หรือกดค้างด้วยนิ้ว เพื่อเลือกข้อความ</string>
+    <string name="copy">คัดลอก</string>
+    <string name="highlight">ไฮไลต์</string>
+    <string name="delete_highlight">ลบไฮไลต์</string>
+    <string name="copied">คัดลอกแล้ว</string>
+    <string name="selection_chars">เลือก %1$d ตัวอักษร</string>
+    <string name="text_preparing">กำลังเตรียมข้อความในเอกสาร…</string>
+    <string name="no_text_here">หน้านี้ไม่มีข้อความให้เลือก (อาจเป็นภาพสแกน) ลองกด OCR ก่อน</string>
 </resources>

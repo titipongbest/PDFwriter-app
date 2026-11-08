@@ -1,5 +1,7 @@
 package com.titipong.pdfwriter
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.RectF
@@ -40,6 +42,7 @@ import com.titipong.pdfwriter.model.DrawTool
 import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
+import com.titipong.pdfwriter.model.TextHighlight
 import com.titipong.pdfwriter.model.TextNote
 import com.titipong.pdfwriter.ocr.OcrEngine
 import com.titipong.pdfwriter.search.SearchIndex
@@ -127,6 +130,20 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private var readingTexts: List<String>? = null
     private var readingAdapter: ReadingAdapter? = null
     private var readingJob: Job? = null
+
+    // View / annotate mode
+    private var interactionView = false
+    private var hlColorIndex = 0
+    private val hlColorViews = mutableListOf<View>()
+    private var menuBookmark: MenuItem? = null
+
+    // Text selection (view mode)
+    private var selPage = -1
+    private var selAnchorStart = 0
+    private var selAnchorEnd = 0
+    private var selFocus = 0
+    private var selView: PdfPageView? = null
+    private var tappedHighlight: Pair<Int, TextHighlight>? = null
 
     // Search
     private var searchIndex: SearchIndex? = null
@@ -251,6 +268,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
+        menuBookmark = menu.findItem(R.id.action_bookmark)
+        updateBookmarkButton()
         return true
     }
 
@@ -261,6 +280,18 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         R.id.action_export -> {
             if (document != null) exportPdf.launch(docName.removeSuffix(".pdf") + "-annotated.pdf")
+            true
+        }
+        R.id.action_pages -> {
+            openPanel(bookmarksTab = false)
+            true
+        }
+        R.id.action_bookmark -> {
+            toggleBookmark()
+            true
+        }
+        R.id.action_bookmark_list -> {
+            openPanel(bookmarksTab = true)
             true
         }
         R.id.action_search -> {
@@ -314,10 +345,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.TEXT] = binding.btnText
         toolButtons.forEach { (t, v) -> v.setOnClickListener { selectTool(t) } }
         binding.btnUndo.setOnClickListener { undoLast() }
-        binding.btnPages.setOnClickListener { openPanel(bookmarksTab = false) }
-        binding.btnViewMode.setOnClickListener { showViewModeDialog() }
-        binding.btnSearch.setOnClickListener { openSearch() }
-        binding.btnOcr.setOnClickListener { showOcrDialog() }
         binding.btnSearchClose.setOnClickListener { closeSearch() }
         binding.btnSearchNext.setOnClickListener { stepHit(+1) }
         binding.btnSearchPrev.setOnClickListener { stepHit(-1) }
@@ -347,11 +374,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 updatePageIndicator()
             }
         })
-        binding.btnBookmark.setOnClickListener { toggleBookmark() }
-        binding.btnBookmark.setOnLongClickListener {
-            openPanel(bookmarksTab = true)
-            true
-        }
 
         // Colors: tap = use, tap the selected one again or long-press = edit.
         val dot = (28 * density).toInt()
@@ -388,6 +410,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
         selectTool(DrawTool.PEN)
         selectColor(colorIndex)
+        setupModeToggle()
     }
 
     private fun stepSize(delta: Int) {
@@ -498,6 +521,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             val removed = when (item) {
                 is InkStroke -> pa.strokes.remove(item)
                 is TextNote -> pa.texts.remove(item)
+                is TextHighlight -> pa.highlights.remove(item)
                 else -> false
             }
             if (removed) {
@@ -578,7 +602,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun updateBookmarkButton() {
         val page = currentPage()
-        binding.btnBookmark.setImageResource(
+        menuBookmark?.setIcon(
             if (page >= 0 && isBookmarked(page)) R.drawable.ic_bookmark_filled else R.drawable.ic_bookmark
         )
     }
@@ -781,10 +805,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val newPages = mutableMapOf<Int, PageAnnotations>()
         order.forEachIndexed { i, src ->
             val pa = src?.let { pages[it] } ?: return@forEachIndexed
-            newPages[i] = PageAnnotations().also {
-                it.strokes.addAll(pa.strokes)
-                it.texts.addAll(pa.texts)
-            }
+            newPages[i] = pa.copy()
         }
         val newBookmarks = bookmarks.mapNotNull { b ->
             val i = order.indexOf(b.page)
@@ -991,12 +1012,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
     }
 
-    private fun snapshotPages(): Map<Int, PageAnnotations> = pages.mapValues { (_, pa) ->
-        PageAnnotations().also {
-            it.strokes.addAll(pa.strokes)
-            it.texts.addAll(pa.texts)
-        }
-    }
+    private fun snapshotPages(): Map<Int, PageAnnotations> = pages.mapValues { (_, pa) -> pa.copy() }
 
     private fun snapshotBookmarks(): List<Bookmark> = bookmarks.map { Bookmark(it.title, it.page) }
 
@@ -1143,6 +1159,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             clearSearch(resetIndex = true)
             binding.emptyView.visibility = View.GONE
             applyView(0)
+            if (interactionView) prepareTextIndex()
             supportActionBar?.title = name
             setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
             binding.recycler.post { updatePageIndicator() }
@@ -1212,6 +1229,181 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (pos < 0) pos = lm.findFirstVisibleItemPosition()
         if (pos < 0) return -1
         return adapter?.firstPageAt(pos)?.takeIf { it >= 0 } ?: pos
+    }
+
+    // ================================================================ view / annotate mode
+
+    private fun setupModeToggle() {
+        interactionView = prefs.getBoolean(PREF_INTERACTION_VIEW, false)
+        hlColorIndex = prefs.getInt(PREF_HL_COLOR, 0).coerceIn(0, HIGHLIGHT_COLORS.size - 1)
+
+        val dot = (28 * density).toInt()
+        val gap = (6 * density).toInt()
+        HIGHLIGHT_COLORS.forEachIndexed { i, c ->
+            val v = View(this)
+            v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
+            v.contentDescription = getString(R.string.highlight_color)
+            v.setOnClickListener { selectHighlightColor(i) }
+            binding.hlColorRow.addView(v)
+            hlColorViews.add(v)
+        }
+        selectHighlightColor(hlColorIndex)
+
+        binding.modeToggle.check(if (interactionView) R.id.btnModeView else R.id.btnModeAnnotate)
+        binding.modeToggle.addOnButtonCheckedListener { _, id, checked ->
+            if (checked) setInteraction(view = id == R.id.btnModeView)
+        }
+        binding.btnSelCopy.setOnClickListener { copySelection() }
+        binding.btnSelHighlight.setOnClickListener { highlightSelection() }
+        binding.btnHlDelete.setOnClickListener { deleteTappedHighlight() }
+        binding.btnSelClose.setOnClickListener { clearSelection() }
+        showModeTools()
+    }
+
+    private fun setInteraction(view: Boolean) {
+        interactionView = view
+        prefs.edit().putBoolean(PREF_INTERACTION_VIEW, view).apply()
+        clearSelection()
+        showModeTools()
+        if (view) prepareTextIndex()
+    }
+
+    private fun showModeTools() {
+        binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
+        binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
+    }
+
+    private fun selectHighlightColor(index: Int) {
+        hlColorIndex = index
+        prefs.edit().putInt(PREF_HL_COLOR, index).apply()
+        hlColorViews.forEachIndexed { i, v ->
+            v.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(HIGHLIGHT_COLORS[i])
+                if (i == hlColorIndex) setStroke((3 * density).toInt(), Color.parseColor("#2563EB"))
+                else setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
+            }
+        }
+    }
+
+    /** Text positions are needed to select text; build them in the background. */
+    private fun prepareTextIndex() {
+        if (document == null || searchIndex != null) return
+        binding.tvSaveState.setText(R.string.text_preparing)
+        buildIndexThen { setStatus(if (pdfWritable) R.string.saved_in_pdf else R.string.saved_in_app) }
+    }
+
+    override val viewMode: Boolean get() = interactionView
+
+    override fun selectBegin(view: PdfPageView, page: Int, nx: Float, ny: Float, byWord: Boolean): Boolean {
+        clearSelection()
+        val idx = searchIndex
+        if (idx == null) {
+            prepareTextIndex()
+            Toast.makeText(this, R.string.text_preparing, Toast.LENGTH_SHORT).show()
+            return false
+        }
+        if (!idx.hasText(page)) {
+            Snackbar.make(binding.root, R.string.no_text_here, Snackbar.LENGTH_LONG)
+                .setAction(R.string.ocr) { showOcrDialog() }
+                .show()
+            return false
+        }
+        val i = idx.charAt(page, nx, ny, maxDistance = 0.03f)
+        if (i < 0) return false
+        val range = if (byWord) idx.wordAt(page, i) else i..i
+        selPage = page
+        selAnchorStart = range.first
+        selAnchorEnd = range.last
+        selFocus = range.last
+        selView = view
+        showSelection()
+        return true
+    }
+
+    override fun selectMove(view: PdfPageView, page: Int, nx: Float, ny: Float) {
+        val idx = searchIndex ?: return
+        if (page != selPage) return
+        val i = idx.charAt(page, nx, ny)
+        if (i >= 0) selFocus = i
+        showSelection()
+    }
+
+    override fun selectEnd(view: PdfPageView, page: Int) {
+        if (selPage < 0) return
+        val (a, b) = selectionRange()
+        val text = searchIndex?.rangeText(selPage, a, b) ?: ""
+        binding.selectionLabel.text = text.take(40).ifEmpty { getString(R.string.selection_chars, b - a + 1) }
+        binding.btnSelCopy.visibility = View.VISIBLE
+        binding.btnSelHighlight.visibility = View.VISIBLE
+        binding.btnHlDelete.visibility = View.GONE
+        binding.selectionBar.visibility = View.VISIBLE
+    }
+
+    override fun viewTap(view: PdfPageView, page: Int, nx: Float, ny: Float) {
+        clearSelection()
+        val pad = 0.004f
+        val hl = pages[page]?.highlights?.lastOrNull { h ->
+            h.rects.any { r -> nx >= r.left - pad && nx <= r.right + pad && ny >= r.top - pad && ny <= r.bottom + pad }
+        } ?: return
+        tappedHighlight = page to hl
+        binding.selectionLabel.text = hl.text.take(40)
+        binding.btnSelCopy.visibility = View.GONE
+        binding.btnSelHighlight.visibility = View.GONE
+        binding.btnHlDelete.visibility = View.VISIBLE
+        binding.selectionBar.visibility = View.VISIBLE
+    }
+
+    private fun selectionRange(): Pair<Int, Int> =
+        if (selFocus >= selAnchorStart) selAnchorStart to maxOf(selAnchorEnd, selFocus)
+        else selFocus to selAnchorEnd
+
+    private fun showSelection() {
+        val idx = searchIndex ?: return
+        if (selPage < 0) return
+        val (a, b) = selectionRange()
+        selView?.selectionRects = idx.rangeRects(selPage, a, b)
+    }
+
+    private fun clearSelection() {
+        selView?.selectionRects = null
+        selView = null
+        selPage = -1
+        tappedHighlight = null
+        binding.selectionBar.visibility = View.GONE
+    }
+
+    private fun copySelection() {
+        val idx = searchIndex ?: return
+        if (selPage < 0) return
+        val (a, b) = selectionRange()
+        val text = idx.rangeText(selPage, a, b)
+        val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("PDF", text))
+        Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
+        clearSelection()
+    }
+
+    private fun highlightSelection() {
+        val idx = searchIndex ?: return
+        val page = selPage
+        if (page < 0) return
+        val (a, b) = selectionRange()
+        val rects = idx.rangeRects(page, a, b)
+        if (rects.isEmpty()) return
+        val hl = TextHighlight(rects, HIGHLIGHT_COLORS[hlColorIndex], idx.rangeText(page, a, b))
+        annotationsFor(page).highlights.add(hl)
+        clearSelection()
+        adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+        onItemAdded(page, hl)
+    }
+
+    private fun deleteTappedHighlight() {
+        val (page, hl) = tappedHighlight ?: return
+        pages[page]?.highlights?.remove(hl)
+        clearSelection()
+        adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+        markDirty()
     }
 
     // ================================================================ search
@@ -1524,6 +1716,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (viewSettings.vertical) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
             false
         )
+        clearSelection()
         binding.recycler.adapter = null
         binding.recycler.layoutManager = lm
         binding.recycler.setPagingMode(!viewSettings.vertical)
@@ -1639,6 +1832,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val MAX_HISTORY = 500
         private const val PDF_SAVE_DELAY_MS = 2500L
         private const val OCR_WIDTH = 2000
+        private const val PREF_INTERACTION_VIEW = "interaction_view"
+        private const val PREF_HL_COLOR = "highlight_color"
+
+        /** Text-highlighter colors (view mode). */
+        private val HIGHLIGHT_COLORS = listOf(
+            Color.parseColor("#FDE047"),
+            Color.parseColor("#86EFAC"),
+            Color.parseColor("#93C5FD"),
+            Color.parseColor("#F9A8D4"),
+            Color.parseColor("#FDBA74")
+        )
         private const val SAMSUNG_PEN_DOWN = 211
         private const val SAMSUNG_PEN_UP = 212
         private const val SAMSUNG_PEN_MOVE = 213

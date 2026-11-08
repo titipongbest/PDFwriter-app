@@ -5,6 +5,7 @@ import com.titipong.pdfwriter.model.Bookmark
 import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
+import com.titipong.pdfwriter.model.TextHighlight
 import com.titipong.pdfwriter.model.TextNote
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,9 +67,23 @@ object AnnotationStorage {
                 to.put("z", t.size.toDouble())
                 texts.put(to)
             }
+            val hls = JSONArray()
+            for (h in page.highlights) {
+                val r = JSONArray()
+                for (rect in h.rects) {
+                    r.put(rect.left.toDouble()); r.put(rect.top.toDouble())
+                    r.put(rect.right.toDouble()); r.put(rect.bottom.toDouble())
+                }
+                hls.put(JSONObject().apply {
+                    put("c", h.color)
+                    put("t", h.text)
+                    put("r", r)
+                })
+            }
             val po = JSONObject()
             po.put("s", strokes)
             po.put("t", texts)
+            po.put("h", hls)
             pagesJson.put(index.toString(), po)
         }
         val root = JSONObject()
@@ -148,6 +163,23 @@ object AnnotationStorage {
                             to.getDouble("z").toFloat()
                         )
                     )
+                }
+                val hls = po.optJSONArray("h") ?: JSONArray()
+                for (i in 0 until hls.length()) {
+                    val ho = hls.getJSONObject(i)
+                    val r = ho.getJSONArray("r")
+                    val rects = ArrayList<android.graphics.RectF>()
+                    var j = 0
+                    while (j + 3 < r.length()) {
+                        rects.add(
+                            android.graphics.RectF(
+                                r.getDouble(j).toFloat(), r.getDouble(j + 1).toFloat(),
+                                r.getDouble(j + 2).toFloat(), r.getDouble(j + 3).toFloat()
+                            )
+                        )
+                        j += 4
+                    }
+                    if (rects.isNotEmpty()) page.highlights.add(TextHighlight(rects, ho.getInt("c"), ho.optString("t")))
                 }
                 result[k.toInt()] = page
             }

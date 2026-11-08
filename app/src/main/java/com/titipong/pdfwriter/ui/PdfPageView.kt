@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -45,6 +46,15 @@ class PdfPageView(context: Context) : View(context) {
         /** Search matches on this page (normalized rects), and those of the current match. */
         fun searchHits(page: Int): List<RectF>? = null
         fun activeSearchHit(page: Int): List<RectF>? = null
+
+        /** View mode: the pen / long-press selects text instead of drawing. */
+        val viewMode: Boolean get() = false
+        /** Starts a text selection at a normalized point; false if there's no text there. */
+        fun selectBegin(view: PdfPageView, page: Int, nx: Float, ny: Float, byWord: Boolean): Boolean = false
+        fun selectMove(view: PdfPageView, page: Int, nx: Float, ny: Float) {}
+        fun selectEnd(view: PdfPageView, page: Int) {}
+        /** A tap in view mode (e.g. on an existing highlight). */
+        fun viewTap(view: PdfPageView, page: Int, nx: Float, ny: Float) {}
     }
 
     /** How the page looks: paper color, and filters for the page image and the ink. */
@@ -116,6 +126,13 @@ class PdfPageView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Current text selection (view mode), normalized line boxes. */
+    var selectionRects: List<RectF>? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     /** Draws a bookmark ribbon at the top-right corner. */
     var bookmarked = false
         set(value) {
@@ -145,6 +162,8 @@ class PdfPageView(context: Context) : View(context) {
     private val dst = RectF()
     private val ribbonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EF4444") }
     private val ribbonPath = Path()
+    private val highlightPaint = Paint()
+    private val selectionPaint = Paint().apply { color = Color.argb(80, 37, 99, 235) }
     private val hitPaint = Paint().apply { color = Color.argb(100, 250, 204, 21) }
     private val activeHitPaint = Paint().apply { color = Color.argb(140, 249, 115, 22) }
 
@@ -270,6 +289,13 @@ class PdfPageView(context: Context) : View(context) {
             bitmapPaint.colorFilter = lk.pageFilter
             canvas.drawBitmap(bmp, null, dst, bitmapPaint)
         }
+        annotations?.highlights?.forEach { hl ->
+            highlightPaint.color = hl.color
+            highlightPaint.alpha = 115
+            highlightPaint.colorFilter = lk.inkFilter
+            for (r in hl.rects) canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, highlightPaint)
+        }
+        selectionRects?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, selectionPaint) }
         hits?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, hitPaint) }
         activeHits?.forEach { r ->
             val pad = 2f * density
@@ -399,6 +425,7 @@ class PdfPageView(context: Context) : View(context) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         val h = host ?: return false
+        if (h.viewMode) return onViewTouch(e, h)
         val toolType = e.getToolType(0)
         val isPen = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
         if (!isPen) return onFinger(e, h)
@@ -469,6 +496,77 @@ class PdfPageView(context: Context) : View(context) {
 
     override fun performClick(): Boolean = super.performClick()
 
+    // ---------------------------------------------------------------- view mode: select text
+
+    private var vmDownX = 0f
+    private var vmDownY = 0f
+    private var vmSelecting = false
+    private var vmPen = false
+
+    private val longPress = Runnable {
+        val h = host ?: return@Runnable
+        if (!vmSelecting && toNormalized(vmDownX, vmDownY) &&
+            h.selectBegin(this, pageIndex, pt[0], pt[1], byWord = true)
+        ) {
+            vmSelecting = true
+            parent?.requestDisallowInterceptTouchEvent(true)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+    }
+
+    /**
+     * S Pen: drag to select (never scrolls). Finger: scrolls as usual; long-press selects the
+     * word under it and dragging extends the selection. A tap goes to [Host.viewTap].
+     */
+    private fun onViewTouch(e: MotionEvent, h: Host): Boolean {
+        val toolType = e.getToolType(0)
+        val isPen = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                vmDownX = e.x
+                vmDownY = e.y
+                vmSelecting = false
+                vmPen = isPen
+                if (isPen) {
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                } else {
+                    postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (vmSelecting) {
+                    if (toNormalized(e.x, e.y)) h.selectMove(this, pageIndex, pt[0], pt[1])
+                } else if (hypot(e.x - vmDownX, e.y - vmDownY) > touchSlop) {
+                    if (vmPen) {
+                        if (toNormalized(vmDownX, vmDownY) && h.selectBegin(this, pageIndex, pt[0], pt[1], byWord = false)) {
+                            vmSelecting = true
+                            if (toNormalized(e.x, e.y)) h.selectMove(this, pageIndex, pt[0], pt[1])
+                        }
+                    } else {
+                        removeCallbacks(longPress) // the finger is scrolling
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                removeCallbacks(longPress)
+                if (vmSelecting) {
+                    h.selectEnd(this, pageIndex)
+                } else if (hypot(e.x - vmDownX, e.y - vmDownY) < touchSlop && toNormalized(e.x, e.y)) {
+                    performClick()
+                    h.viewTap(this, pageIndex, pt[0], pt[1])
+                }
+                vmSelecting = false
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                removeCallbacks(longPress)
+                if (vmSelecting) h.selectEnd(this, pageIndex)
+                vmSelecting = false
+            }
+        }
+        return true
+    }
+
     private fun begin(e: MotionEvent, h: Host, eraserButton: Boolean) {
         val tool = if (eraserButton) DrawTool.ERASER else h.tool
         when (tool) {
@@ -537,7 +635,10 @@ class PdfPageView(context: Context) : View(context) {
             val tw = textPaint.measureText(t.text) / s
             x >= t.x - rn && x <= t.x + tw + rn && y >= t.y - t.size - rn && y <= t.y + rn
         }
-        if (strokesRemoved || textsRemoved) {
+        val highlightsRemoved = a.highlights.removeAll { hl ->
+            hl.rects.any { r -> x >= r.left - rn && x <= r.right + rn && y >= r.top - rn && y <= r.bottom + rn }
+        }
+        if (strokesRemoved || textsRemoved || highlightsRemoved) {
             inkDirty = true
             h.onItemsErased(pageIndex)
         }

@@ -2,25 +2,41 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
-        android:id="@+id/action_open"
-        android:title="@string/open"
+        android:id="@+id/action_pages"
+        android:icon="@drawable/ic_pages"
+        android:title="@string/pages"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_bookmark"
+        android:icon="@drawable/ic_bookmark"
+        android:title="@string/bookmark_toggle"
         app:showAsAction="always" />
     <item
         android:id="@+id/action_search"
         android:icon="@drawable/ic_search"
         android:title="@string/search"
-        app:showAsAction="ifRoom" />
+        app:showAsAction="always" />
     <item
         android:id="@+id/action_ocr"
+        android:icon="@drawable/ic_ocr"
         android:title="@string/ocr_title"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_view_mode"
+        android:icon="@drawable/ic_view_mode"
+        android:title="@string/view_mode"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_open"
+        android:title="@string/open"
+        app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_bookmark_list"
+        android:title="@string/tab_bookmarks"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_export"
         android:title="@string/export"
-        app:showAsAction="never" />
-    <item
-        android:id="@+id/action_view_mode"
-        android:title="@string/view_mode"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_reset_zoom"

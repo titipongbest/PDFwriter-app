@@ -51,6 +51,70 @@ class SearchIndex private constructor(private val pages: List<PageText>) {
         return hits
     }
 
+    // ------------------------------------------------------------ selection (view mode)
+
+    fun hasText(page: Int): Boolean = pages.getOrNull(page)?.compact?.isNotEmpty() == true
+
+    /**
+     * Index of the character at (or nearest to) a normalized point. With [maxDistance] > 0,
+     * returns -1 when nothing is that close (e.g. a tap on blank margin).
+     */
+    fun charAt(page: Int, nx: Float, ny: Float, maxDistance: Float = 0f): Int {
+        val pt = pages.getOrNull(page) ?: return -1
+        var best = -1
+        var bestD = Float.MAX_VALUE
+        pt.rects.forEachIndexed { i, r ->
+            val dx = if (nx < r.left) r.left - nx else if (nx > r.right) nx - r.right else 0f
+            // Weigh vertical distance more, so a point between lines picks its own line.
+            val dy = if (ny < r.top) r.top - ny else if (ny > r.bottom) ny - r.bottom else 0f
+            val d = dx + dy * 3f
+            if (d < bestD) {
+                bestD = d
+                best = i
+            }
+        }
+        if (maxDistance > 0f && bestD > maxDistance) return -1
+        return best
+    }
+
+    /** The word around character [i]. Thai words are found with ICU's dictionary word breaker. */
+    fun wordAt(page: Int, i: Int): IntRange {
+        val pt = pages.getOrNull(page) ?: return i..i
+        if (i !in pt.compact.indices) return i..i
+        val disp = pt.compactToDisplay[i]
+        val bi = java.text.BreakIterator.getWordInstance(Locale("th"))
+        bi.setText(pt.display)
+        var end = bi.following(disp)
+        if (end == java.text.BreakIterator.DONE) end = pt.display.length
+        var start = bi.previous()
+        if (start == java.text.BreakIterator.DONE || start > disp) start = disp
+        // Map the display range back to compact indices.
+        var s = i
+        while (s > 0 && pt.compactToDisplay[s - 1] >= start) s--
+        var e = i
+        while (e + 1 < pt.compact.length && pt.compactToDisplay[e + 1] < end) e++
+        return s..e
+    }
+
+    fun rangeRects(page: Int, from: Int, to: Int): List<RectF> {
+        val pt = pages.getOrNull(page) ?: return emptyList()
+        val a = min(from, to).coerceIn(0, pt.rects.size - 1)
+        val b = max(from, to).coerceIn(0, pt.rects.size - 1)
+        if (pt.rects.isEmpty()) return emptyList()
+        return lineRects(pt.rects.subList(a, b + 1))
+    }
+
+    /** The selected text with its original spacing. */
+    fun rangeText(page: Int, from: Int, to: Int): String {
+        val pt = pages.getOrNull(page) ?: return ""
+        if (pt.compact.isEmpty()) return ""
+        val a = min(from, to).coerceIn(0, pt.compact.length - 1)
+        val b = max(from, to).coerceIn(0, pt.compact.length - 1)
+        val ds = pt.compactToDisplay[a]
+        val de = pt.compactToDisplay[b] + 1
+        return pt.display.substring(ds, de).replace(Regex("[ \\t]+"), " ").trim()
+    }
+
     /** Merges character boxes into one box per text line. */
     private fun lineRects(chars: List<RectF>): List<RectF> {
         val out = ArrayList<RectF>()

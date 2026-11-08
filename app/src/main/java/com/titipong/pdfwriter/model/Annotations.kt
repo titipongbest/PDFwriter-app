@@ -22,10 +22,28 @@ class TextNote(
     val size: Float
 )
 
+/**
+ * A text highlight (PDF /Highlight markup). [rects] are line boxes, normalized like everything
+ * else (x 0..1 across the page width, y in width units, as displayed). Identity equality (undo).
+ */
+class TextHighlight(
+    val rects: List<android.graphics.RectF>,
+    val color: Int,
+    val text: String
+)
+
 class PageAnnotations {
     val strokes: MutableList<InkStroke> = mutableListOf()
     val texts: MutableList<TextNote> = mutableListOf()
-    fun isEmpty() = strokes.isEmpty() && texts.isEmpty()
+    val highlights: MutableList<TextHighlight> = mutableListOf()
+    fun isEmpty() = strokes.isEmpty() && texts.isEmpty() && highlights.isEmpty()
+
+    /** Shallow copy (the items themselves are never mutated once added). */
+    fun copy(): PageAnnotations = PageAnnotations().also {
+        it.strokes.addAll(strokes)
+        it.texts.addAll(texts)
+        it.highlights.addAll(highlights)
+    }
 }
 
 /** A bookmark this app manages (stored in the PDF outline, marked /PWBookmark). */

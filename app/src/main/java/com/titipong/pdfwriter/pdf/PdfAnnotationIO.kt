@@ -8,6 +8,7 @@ import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
+import com.titipong.pdfwriter.model.TextHighlight
 import com.titipong.pdfwriter.model.TextNote
 import com.titipong.pdfwriter.ocr.OcrEngine
 import com.titipong.pdfwriter.ui.PdfPageView
@@ -59,6 +60,8 @@ object PdfAnnotationIO {
 
     private val INK = COSName.getPDFName("Ink")
     private val FREE_TEXT = COSName.getPDFName("FreeText")
+    private val HIGHLIGHT = COSName.getPDFName("Highlight")
+    private val QUAD_POINTS = COSName.getPDFName("QuadPoints")
     private val INK_LIST = COSName.getPDFName("InkList")
     private val BORDER = COSName.getPDFName("Border")
     private val PW_PRESSURE = COSName.getPDFName("PWPressure")
@@ -103,6 +106,7 @@ object PdfAnnotationIO {
                     when (d.getDictionaryObject(COSName.SUBTYPE)) {
                         INK -> parseInk(d, geo)?.let { pa.strokes.addAll(it) }
                         FREE_TEXT -> parseText(d)?.let { pa.texts.add(it) }
+                        HIGHLIGHT -> parseHighlight(d, geo)?.let { pa.highlights.add(it) }
                     }
                 }
                 if (!pa.isEmpty()) result[index] = pa
@@ -201,6 +205,33 @@ object PdfAnnotationIO {
         null
     }
 
+    /** Any app's /Highlight: one box per quad (8 numbers), in display coordinates. */
+    private fun parseHighlight(d: COSDictionary, geo: PageGeometry): TextHighlight? = try {
+        val q = d.getDictionaryObject(QUAD_POINTS) as? COSArray
+        if (q == null || q.size() < 8 || geo.displayWidth <= 0f) {
+            null
+        } else {
+            val rects = ArrayList<android.graphics.RectF>()
+            var i = 0
+            while (i + 7 < q.size()) {
+                var l = Float.MAX_VALUE
+                var t = Float.MAX_VALUE
+                var r = -Float.MAX_VALUE
+                var b = -Float.MAX_VALUE
+                for (k in 0 until 4) {
+                    val n = geo.toNormalized(num(q.getObject(i + k * 2)) ?: 0f, num(q.getObject(i + k * 2 + 1)) ?: 0f)
+                    l = min(l, n[0]); r = max(r, n[0]); t = min(t, n[1]); b = max(b, n[1])
+                }
+                if (r > l && b > t) rects.add(android.graphics.RectF(l, t, r, b))
+                i += 8
+            }
+            if (rects.isEmpty()) null
+            else TextHighlight(rects, readColor(d.getDictionaryObject(COSName.C) as? COSArray), d.getString(COSName.CONTENTS) ?: "")
+        }
+    } catch (e: Exception) {
+        null
+    }
+
     private fun parseText(d: COSDictionary): TextNote? = try {
         if (!d.getBoolean(PW_TEXT, false)) {
             null
@@ -237,6 +268,7 @@ object PdfAnnotationIO {
         return when (d.getDictionaryObject(COSName.SUBTYPE)) {
             INK -> parseInk(d, geo) != null // unreadable ink is left untouched
             FREE_TEXT -> d.getBoolean(PW_TEXT, false)
+            HIGHLIGHT -> parseHighlight(d, geo) != null // unreadable highlights are left untouched
             else -> false
         }
     }
@@ -272,6 +304,7 @@ object PdfAnnotationIO {
                         if (snap != null && geo.displayWidth > 0f) {
                             for (s in snap.strokes) if (s.points.isNotEmpty()) list.add(buildInk(doc, s, geo))
                             for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
+                            for (h in snap.highlights) if (h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
                         }
                         page.annotations = list
                     }
@@ -498,6 +531,52 @@ object PdfAnnotationIO {
                     cs.stroke()
                 }
             }
+        }
+        annot.appearance = PDAppearanceDictionary().apply { setNormalAppearance(ap) }
+        return annot
+    }
+
+    private fun buildHighlight(doc: PDDocument, h: TextHighlight, geo: PageGeometry): PDAnnotation {
+        val quads = COSArray()
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (r in h.rects) {
+            // Acrobat's order: upper-left, upper-right, lower-left, lower-right (relative to the text).
+            for ((nx, ny) in listOf(r.left to r.top, r.right to r.top, r.left to r.bottom, r.right to r.bottom)) {
+                val u = geo.toUser(nx, ny)
+                quads.add(COSFloat(u[0]))
+                quads.add(COSFloat(u[1]))
+                minX = min(minX, u[0]); maxX = max(maxX, u[0])
+                minY = min(minY, u[1]); maxY = max(maxY, u[1])
+            }
+        }
+        val rect = PDRectangle(minX - 1f, minY - 1f, (maxX - minX) + 2f, (maxY - minY) + 2f)
+        val d = baseDict(HIGHLIGHT, rect)
+        d.setItem(QUAD_POINTS, quads)
+        d.setItem(COSName.C, colorArray(h.color))
+        d.setFloat(COSName.CA, 1f)
+        if (h.text.isNotEmpty()) d.setString(COSName.CONTENTS, h.text)
+
+        val annot = PDAnnotation.createAnnotation(d)
+        val ap = PDAppearanceStream(doc)
+        ap.bBox = rect
+        ap.resources = PDResources()
+        PDPageContentStream(doc, ap).use { cs ->
+            cs.transform(geo.displayUpMatrix())
+            val gs = PDExtendedGraphicsState()
+            gs.blendMode = BlendMode.MULTIPLY // text under the highlight stays readable
+            cs.setGraphicsStateParameters(gs)
+            val c = rgb(h.color)
+            cs.setNonStrokingColor(c[0], c[1], c[2])
+            for (r in h.rects) {
+                val x = geo.upX(r.left)
+                val yTop = geo.upY(r.top)
+                val yBottom = geo.upY(r.bottom)
+                cs.addRect(x, yBottom, geo.upX(r.right) - x, yTop - yBottom)
+            }
+            cs.fill()
         }
         annot.appearance = PDAppearanceDictionary().apply { setNormalAppearance(ap) }
         return annot
