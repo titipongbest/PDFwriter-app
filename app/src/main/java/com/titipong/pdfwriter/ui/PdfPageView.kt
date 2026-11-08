@@ -17,9 +17,11 @@ import android.view.ViewConfiguration
 import com.titipong.pdfwriter.model.DrawTool
 import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
+import android.graphics.PointF
 import com.titipong.pdfwriter.model.StrokePoint
 import com.titipong.pdfwriter.model.TextNote
 import com.titipong.pdfwriter.model.ImageNote
+import com.titipong.pdfwriter.model.ItemGroup
 import com.titipong.pdfwriter.model.TextLayout
 import kotlin.math.hypot
 import kotlin.math.max
@@ -49,6 +51,8 @@ class PdfPageView(context: Context) : View(context) {
         fun requestImage(page: Int, x: Float, y: Float) {}
         /** Highlighter tool: a tap on an existing highlighter stroke. */
         fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {}
+        /** Select tool: items circled with the lasso (or tapped again). */
+        fun onGroupSelected(view: PdfPageView, page: Int, group: ItemGroup) {}
         /** Lines of the document's own text on [page] (normalized boxes), to align notes / pictures with. */
         fun guideBoxes(page: Int): List<RectF> = emptyList()
         /** The selected text note is being dragged (hide popups), and was moved / resized. */
@@ -91,7 +95,7 @@ class PdfPageView(context: Context) : View(context) {
         }
     }
 
-    private enum class Mode { NONE, INK, ERASE, TEXT }
+    private enum class Mode { NONE, INK, ERASE, TEXT, LASSO }
 
     var host: Host? = null
     var pageIndex = -1
@@ -408,6 +412,7 @@ class PdfPageView(context: Context) : View(context) {
             val f = noteFrame(n) ?: return@let
             canvas.drawRect(f.left * s, f.top * s, f.right * s, f.bottom * s, frameDash)
             val hs = 5f * density
+            if (n is ItemGroup) return@let // moved as a whole: frame only
             if (n is InkStroke) {
                 // Round handles at the ends of a straight line: drag to make it longer / shorter.
                 if (isLine(n)) for (p in n.points) {
@@ -522,6 +527,15 @@ class PdfPageView(context: Context) : View(context) {
                 canvas.drawText(line.text, lx * s, ly * s, textPaint)
             }
         }
+        // Lasso being drawn.
+        if (lasso.size > 1) {
+            lassoPath.reset()
+            lassoPath.moveTo(lasso[0].x * s, lasso[0].y * s)
+            for (i in 1 until lasso.size) lassoPath.lineTo(lasso[i].x * s, lasso[i].y * s)
+            lassoPath.close()
+            canvas.drawPath(lassoPath, lassoFill)
+            canvas.drawPath(lassoPath, lassoPaint)
+        }
         // While dragging: alignment guides.
         if (guidesX.isNotEmpty() || guidesY.isNotEmpty()) {
             val ph = pageAspect * s
@@ -608,6 +622,12 @@ class PdfPageView(context: Context) : View(context) {
                     mode = Mode.ERASE
                 }
                 when (mode) {
+                    Mode.LASSO -> {
+                        for (i in 0 until e.historySize) {
+                            if (toNormalized(e.getHistoricalX(i), e.getHistoricalY(i))) lasso.add(PointF(pt[0], pt[1]))
+                        }
+                        if (toNormalized(e.x, e.y)) lasso.add(PointF(pt[0], pt[1]))
+                    }
                     Mode.INK -> appendPoints(e)
                     Mode.ERASE -> {
                         for (i in 0 until e.historySize) eraseAt(e.getHistoricalX(i), e.getHistoricalY(i), h)
@@ -626,6 +646,7 @@ class PdfPageView(context: Context) : View(context) {
                             commitStroke(h)
                         }
                     }
+                    Mode.LASSO -> finishLasso(h)
                     Mode.TEXT -> if (toNormalized(e.x, e.y)) {
                         if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
                     }
@@ -635,6 +656,7 @@ class PdfPageView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_CANCEL -> {
                 active = null
+                lasso.clear()
                 endGesture()
             }
         }
@@ -643,6 +665,7 @@ class PdfPageView(context: Context) : View(context) {
 
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
         if (h.tool == DrawTool.HIGHLIGHTER && h.toolActive) return onFingerHighlighter(e, h)
+        if (h.tool == DrawTool.SELECT && h.toolActive) return onFingerSelect(e, h)
         val placing = h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE
         if (!placing || !h.toolActive) return false // let the list scroll
         if (noteDrag(e, h)) return true
@@ -719,6 +742,85 @@ class PdfPageView(context: Context) : View(context) {
         return true
     }
 
+    // ---------------------------------------------------------------- lasso selection
+
+    private val lasso = ArrayList<PointF>()
+    private val lassoPath = android.graphics.Path()
+    private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(37, 99, 235)
+        strokeWidth = 1.5f * resources.displayMetrics.density
+        pathEffect = android.graphics.DashPathEffect(
+            floatArrayOf(6f * resources.displayMetrics.density, 4f * resources.displayMetrics.density), 0f
+        )
+    }
+    private val lassoFill = Paint().apply { color = Color.argb(28, 37, 99, 235) }
+
+    private fun inLasso(x: Float, y: Float): Boolean {
+        var inside = false
+        var j = lasso.size - 1
+        for (i in lasso.indices) {
+            val a = lasso[i]
+            val b = lasso[j]
+            if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside
+            j = i
+        }
+        return inside
+    }
+
+    /** Lasso done: pick ink with most of its points inside, and boxes / pictures whose center is inside. */
+    private fun finishLasso(h: Host) {
+        val pts = ArrayList(lasso)
+        lasso.clear()
+        val small = pts.size < 3 || run {
+            val w = pts.maxOf { it.x } - pts.minOf { it.x }
+            val hh = pts.maxOf { it.y } - pts.minOf { it.y }
+            maxOf(w, hh) * pageScale < touchSlop * 2
+        }
+        if (small) {
+            if (editingNote != null) h.onNoteDeselect()
+            return
+        }
+        lasso.addAll(pts)
+        val a = annotations
+        val picked = ArrayList<Any>()
+        if (a != null) {
+            a.strokes.filterTo(picked) { st -> st.points.isNotEmpty() && st.points.count { inLasso(it.x, it.y) } * 2 >= st.points.size }
+            a.texts.filterTo(picked) { t -> textBox(t).let { inLasso(it.centerX(), it.centerY()) } }
+            a.images.filterTo(picked) { im -> inLasso(im.x + im.w / 2f, im.y + im.h / 2f) }
+        }
+        lasso.clear()
+        if (picked.isEmpty()) {
+            if (editingNote != null) h.onNoteDeselect()
+        } else {
+            h.onGroupSelected(this, pageIndex, ItemGroup(picked))
+        }
+    }
+
+    private var selDownX = 0f
+    private var selDownY = 0f
+
+    /** Finger with the select tool (not drawing with fingers): drag the selection, tap away to unselect, else scroll. */
+    private fun onFingerSelect(e: MotionEvent, h: Host): Boolean {
+        if (noteDrag(e, h)) return true
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                selDownX = e.x
+                selDownY = e.y
+            }
+            MotionEvent.ACTION_UP -> if (hypot(e.x - selDownX, e.y - selDownY) < touchSlop && editingNote != null) h.onNoteDeselect()
+        }
+        return true
+    }
+
+    private fun shifted(item: Any, dx: Float, dy: Float): Any = when (item) {
+        is TextNote -> item.copy(x = item.x + dx, y = item.y + dy)
+        is ImageNote -> ImageNote(item.file, item.x + dx, item.y + dy, item.w, item.h)
+        is InkStroke -> InkStroke(item.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), item.color, item.width, item.highlighter)
+        is ItemGroup -> ItemGroup(item.items.map { shifted(it, dx, dy) })
+        else -> item
+    }
+
     /** A straight highlighter line (two points) can be lengthened / shortened from its ends. */
     private fun isLine(st: InkStroke) = st.points.size == 2
 
@@ -732,6 +834,14 @@ class PdfPageView(context: Context) : View(context) {
     private var dragMoved = false
 
     private fun noteFrame(item: Any): RectF? {
+        if (item is ItemGroup) {
+            var r: RectF? = null
+            for (it in item.items) {
+                val f = (it as? TextNote)?.let { t -> textBox(t) } ?: noteFrame(it) ?: continue
+                r = r?.apply { union(f) } ?: RectF(f)
+            }
+            return r?.apply { inset(-4f * density / pageScale.coerceAtLeast(1f), -4f * density / pageScale.coerceAtLeast(1f)) }
+        }
         if (item is ImageNote) return RectF(item.x, item.y, item.x + item.w, item.y + item.h)
         if (item is InkStroke) {
             if (item.points.isEmpty()) return null
@@ -764,7 +874,9 @@ class PdfPageView(context: Context) : View(context) {
                 val f = noteFrame(note) ?: return false
                 val grab = 18f * density / pageScale.coerceAtLeast(1f)
                 val corner = corners(f).indexOfFirst { (cx, cy) -> hypot(cx - x, cy - y) < grab }
-                dragKind = if (note is InkStroke) {
+                dragKind = if (note is ItemGroup) {
+                    if (RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y)) 1 else 0
+                } else if (note is InkStroke) {
                     val end = if (isLine(note)) note.points.indexOfFirst { hypot(it.x - x, it.y - y) < grab } else -1
                     when {
                         end >= 0 -> 6 + end // 6 = first end, 7 = last end
@@ -806,6 +918,7 @@ class PdfPageView(context: Context) : View(context) {
                     pt[1] = sy
                 }
                 var updated: Any = when {
+                    orig is ItemGroup -> shifted(orig, dx, dy)
                     orig is TextNote && (dragKind == 8 || dragKind == 9) -> widened(orig, dragKind == 8, pt[0])
                     orig is InkStroke && dragKind == 1 ->
                         InkStroke(orig.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), orig.color, orig.width, orig.highlighter)
@@ -836,7 +949,8 @@ class PdfPageView(context: Context) : View(context) {
                 } else if (!dragMoved && now != null) {
                     performClick()
                     // A tap: show its menu again.
-                    if (now is ImageNote) h.onImageTapped(this, pageIndex, now)
+                    if (now is ItemGroup) h.onGroupSelected(this, pageIndex, now)
+                    else if (now is ImageNote) h.onImageTapped(this, pageIndex, now)
                     else if (now is InkStroke) h.onStrokeTapped(this, pageIndex, now)
                     else if (now is TextNote) h.onTextTapped(this, pageIndex, now)
                 }
@@ -877,8 +991,12 @@ class PdfPageView(context: Context) : View(context) {
         val ys = arrayListOf(0f, pageAspect / 2f, pageAspect)
         val a = annotations
         if (a != null) {
-            val frames = a.texts.filter { it !== exclude && it !== editingNote }.map { textBox(it) } +
-                a.images.filter { it !== exclude && it !== editingNote }.map { RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
+            val skip = HashSet<Any>()
+            for (g in listOf(exclude, editingNote)) {
+                if (g is ItemGroup) skip.addAll(g.items) else if (g != null) skip.add(g)
+            }
+            val frames = a.texts.filter { it !in skip }.map { textBox(it) } +
+                a.images.filter { it !in skip }.map { RectF(it.x, it.y, it.x + it.w, it.y + it.h) }
             for (f in frames) {
                 xs += f.left; xs += f.centerX(); xs += f.right
                 ys += f.top; ys += f.centerY(); ys += f.bottom
@@ -919,6 +1037,7 @@ class PdfPageView(context: Context) : View(context) {
         sx?.let { guidesX += it.second }
         sy?.let { guidesY += it.second }
         if (dx == 0f && dy == 0f) return item
+        if (item is ItemGroup) return shifted(item, dx, dy)
         return when (item) {
             is TextNote -> item.copy(x = item.x + dx, y = item.y + dy)
             is ImageNote -> ImageNote(item.file, item.x + dx, item.y + dy, item.w, item.h)
@@ -978,6 +1097,13 @@ class PdfPageView(context: Context) : View(context) {
 
     private fun replaceNote(old: Any, new: Any) {
         val a = annotations ?: return
+        if (old is ItemGroup && new is ItemGroup) {
+            old.items.zip(new.items).forEach { (o, n) -> replaceIn(a, o, n) }
+            editingNote = new
+            inkDirty = true
+            invalidate()
+            return
+        }
         if (old is TextNote && new is TextNote) {
             val i = a.texts.indexOf(old)
             if (i < 0) return
@@ -1006,6 +1132,14 @@ class PdfPageView(context: Context) : View(context) {
             return
         }
         if (hit != null) h.onTextTapped(this, pageIndex, hit) else h.requestText(pageIndex, nx, ny)
+    }
+
+    private fun replaceIn(a: PageAnnotations, old: Any, new: Any) {
+        when {
+            old is TextNote && new is TextNote -> a.texts.indexOf(old).takeIf { it >= 0 }?.let { a.texts[it] = new }
+            old is ImageNote && new is ImageNote -> a.images.indexOf(old).takeIf { it >= 0 }?.let { a.images[it] = new }
+            old is InkStroke && new is InkStroke -> a.strokes.indexOf(old).takeIf { it >= 0 }?.let { a.strokes[it] = new }
+        }
     }
 
     /** Image tool tap: on a picture -> select it; elsewhere -> pick a picture to place there. */
@@ -1107,6 +1241,11 @@ class PdfPageView(context: Context) : View(context) {
                 eraseAt(e.x, e.y, h)
             }
             DrawTool.TEXT, DrawTool.IMAGE -> mode = Mode.TEXT // a tap (handled on lift)
+            DrawTool.SELECT -> {
+                mode = Mode.LASSO
+                lasso.clear()
+                if (toNormalized(e.x, e.y)) lasso.add(PointF(pt[0], pt[1]))
+            }
             DrawTool.PEN, DrawTool.HIGHLIGHTER -> {
                 mode = Mode.INK
                 val hl = tool == DrawTool.HIGHLIGHTER
@@ -1171,6 +1310,7 @@ class PdfPageView(context: Context) : View(context) {
         // are deleted by tapping them (text tool / view mode).
         if (strokesRemoved) {
             (editingNote as? InkStroke)?.let { if (it !in a.strokes) h.onNoteDeselect() }
+            (editingNote as? ItemGroup)?.let { g -> if (g.items.any { it is InkStroke && it !in a.strokes }) h.onNoteDeselect() }
             inkDirty = true
             h.onItemsErased(pageIndex)
         }
@@ -1280,6 +1420,6 @@ class PdfPageView(context: Context) : View(context) {
         fun pressureScale(p: Float): Float = 0.4f + p.coerceIn(0f, 1f) * 1.2f
 
         /** Tools whose items can be selected and dragged with a frame. */
-        private val DRAGGABLE_TOOLS = setOf(DrawTool.TEXT, DrawTool.IMAGE, DrawTool.HIGHLIGHTER)
+        private val DRAGGABLE_TOOLS = setOf(DrawTool.TEXT, DrawTool.IMAGE, DrawTool.HIGHLIGHTER, DrawTool.SELECT)
     }
 }

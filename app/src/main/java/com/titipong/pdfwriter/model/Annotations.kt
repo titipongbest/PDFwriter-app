@@ -1,6 +1,9 @@
 package com.titipong.pdfwriter.model
 
-enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE }
+enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE, SELECT }
+
+/** Several items picked together with the lasso (strokes, text boxes, pictures). */
+class ItemGroup(val items: List<Any>)
 
 /** x and y are normalized to the page WIDTH (0..1 across, 0..aspect down). */
 class StrokePoint(val x: Float, val y: Float, val pressure: Float)

@@ -94,7 +94,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         DrawTool.HIGHLIGHTER to ToolSetting(HIGHLIGHTER_INK_COLORS.toMutableList(), 0, 30),
         DrawTool.TEXT to ToolSetting(DEFAULT_COLORS.toMutableList(), 0, 30),
         DrawTool.ERASER to ToolSetting(mutableListOf(), 0, 40),
-        DrawTool.IMAGE to ToolSetting(mutableListOf(), 0, 30)
+        DrawTool.IMAGE to ToolSetting(mutableListOf(), 0, 30),
+        DrawTool.SELECT to ToolSetting(mutableListOf(), 0, 30)
     )
     private val cur: ToolSetting get() = toolSettings.getValue(currentTool)
     private val palette: MutableList<Int> get() = cur.palette
@@ -460,9 +461,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             val paletteStr = prefs.getString(k + "palette", null)
                 ?: if (t == DrawTool.PEN) prefs.getString(PREF_PALETTE, null) else null
             paletteStr?.split(',')?.mapNotNull { it.toIntOrNull() }?.let { saved ->
-                if (saved.size == ts.palette.size) {
+                // Older versions had 6 colors: keep the first 5.
+                if (saved.size >= ts.palette.size) {
+                    val n = ts.palette.size
                     ts.palette.clear()
-                    ts.palette.addAll(saved)
+                    ts.palette.addAll(saved.take(n))
                 }
             }
             val idx = if (prefs.contains(k + "color")) prefs.getInt(k + "color", 0)
@@ -498,6 +501,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.ERASER] = binding.btnEraser
         toolButtons[DrawTool.TEXT] = binding.btnText
         toolButtons[DrawTool.IMAGE] = binding.btnImage
+        toolButtons[DrawTool.SELECT] = binding.btnSelect
         toolButtons.forEach { (t, v) ->
             v.setOnClickListener {
                 if (t == currentTool && toolOn) {
@@ -644,7 +648,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         // Pictures have no color or size: resize them with their frame.
-        val sized = if (t == DrawTool.IMAGE) View.GONE else View.VISIBLE
+        val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT) View.GONE else View.VISIBLE
         listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
             .forEach { it.visibility = sized }
         if (hasColors) selectColor(colorIndex)
@@ -784,6 +788,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 is TextNote -> pa.texts.remove(item)
                 is ImageNote -> pa.images.remove(item)
                 is TextHighlight -> pa.highlights.remove(item)
+                is GroupDelete -> {
+                    for (it in item.items) when (it) {
+                        is TextNote -> pa.texts.add(it)
+                        is ImageNote -> pa.images.add(it)
+                        is InkStroke -> pa.strokes.add(it)
+                    }
+                    true
+                }
                 is NoteEdit -> {
                     val before = item.before
                     val after = item.after
@@ -799,6 +811,16 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                         val i = pa.strokes.indexOf(after)
                         if (i >= 0) pa.strokes[i] = before
                         i >= 0
+                    } else if (before is com.titipong.pdfwriter.model.ItemGroup && after is com.titipong.pdfwriter.model.ItemGroup) {
+                        var any = false
+                        before.items.zip(after.items).forEach { (b, a) ->
+                            when {
+                                b is TextNote && a is TextNote -> pa.texts.indexOf(a).takeIf { it >= 0 }?.let { pa.texts[it] = b; any = true }
+                                b is ImageNote && a is ImageNote -> pa.images.indexOf(a).takeIf { it >= 0 }?.let { pa.images[it] = b; any = true }
+                                b is InkStroke && a is InkStroke -> pa.strokes.indexOf(a).takeIf { it >= 0 }?.let { pa.strokes[it] = b; any = true }
+                            }
+                        }
+                        any
                     } else {
                         false
                     }
@@ -2388,6 +2410,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (after is TextNote) onTextTapped(view, page, after)
         if (after is ImageNote) onImageTapped(view, page, after)
         if (after is InkStroke) onStrokeTapped(view, page, after)
+        if (after is com.titipong.pdfwriter.model.ItemGroup) onGroupSelected(view, page, after)
     }
 
     /** Undo record for a text note / picture that was moved, resized or edited. */
@@ -2395,6 +2418,37 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private var tappedImage: Pair<Int, ImageNote>? = null
     private var tappedStroke: Pair<Int, InkStroke>? = null
+    private var tappedGroup: Pair<Int, com.titipong.pdfwriter.model.ItemGroup>? = null
+
+    override fun onGroupSelected(view: PdfPageView, page: Int, group: com.titipong.pdfwriter.model.ItemGroup) {
+        clearSelection()
+        tappedGroup = page to group
+        noteView = view
+        view.editingNote = group // dotted frame around everything picked: drag to move together
+        binding.btnSelCopy.visibility = View.GONE
+        binding.btnSelHighlight.visibility = View.GONE
+        binding.btnSelUnderline.visibility = View.GONE
+        binding.btnNoteEdit.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.GONE
+        binding.btnHlDelete.visibility = View.VISIBLE
+        var box: RectF? = null
+        for (it in group.items) {
+            val r = when (it) {
+                is TextNote -> view.textBox(it)
+                is ImageNote -> RectF(it.x, it.y, it.x + it.w, it.y + it.h)
+                is InkStroke -> if (it.points.isEmpty()) null else RectF(
+                    it.points.minOf { p -> p.x }, it.points.minOf { p -> p.y },
+                    it.points.maxOf { p -> p.x }, it.points.maxOf { p -> p.y }
+                )
+                else -> null
+            } ?: continue
+            box = box?.apply { union(r) } ?: RectF(r)
+        }
+        showBarAt(view, listOfNotNull(box))
+    }
+
+    /** Undo record for deleting a lasso selection: the items come back. */
+    private class GroupDelete(val items: List<Any>)
 
     override fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {
         clearSelection()
@@ -2516,6 +2570,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         tappedNote = null
         tappedImage = null
         tappedStroke = null
+        tappedGroup = null
         barAnchor = null
         binding.btnNoteEdit.visibility = View.GONE
         binding.selectionBar.visibility = View.GONE
@@ -2689,6 +2744,21 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun deleteTappedHighlight() {
+        tappedGroup?.let { (page, group) ->
+            val pa = pages[page]
+            if (pa != null) {
+                for (it in group.items) when (it) {
+                    is TextNote -> pa.texts.remove(it)
+                    is ImageNote -> pa.images.remove(it)
+                    is InkStroke -> pa.strokes.remove(it)
+                }
+                history.addLast(page to GroupDelete(group.items))
+            }
+            clearSelection()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+            return
+        }
         tappedStroke?.let { (page, stroke) ->
             pages[page]?.strokes?.remove(stroke)
             clearSelection()
@@ -3261,8 +3331,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             Color.parseColor("#4ADE80"),
             Color.parseColor("#60A5FA"),
             Color.parseColor("#F472B6"),
-            Color.parseColor("#FB923C"),
-            Color.parseColor("#A78BFA")
+            Color.parseColor("#FB923C")
         )
 
         private val DEFAULT_COLORS = listOf(
@@ -3270,8 +3339,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             Color.parseColor("#2563EB"),
             Color.parseColor("#DC2626"),
             Color.parseColor("#16A34A"),
-            Color.parseColor("#F59E0B"),
-            Color.parseColor("#7C3AED")
+            Color.parseColor("#F59E0B")
         )
     }
 }

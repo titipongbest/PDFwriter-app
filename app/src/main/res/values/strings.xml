@@ -187,6 +187,7 @@
     <string name="set_ink_smoothing_desc">When enabled, ink strokes are smoothed.</string>
     <string name="set_hl_smoothing">Free Highlighter Smoothing</string>
     <string name="tool_image">Image</string>
+    <string name="tool_select">Select</string>
     <string name="new_pdf">New</string>
     <string name="align_left">Align left</string>
     <string name="align_center">Center</string>
