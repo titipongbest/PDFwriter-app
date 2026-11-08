@@ -41,9 +41,22 @@ jobs:
           path: out/*.apk
           retention-days: 30
 
+      - name: Read version
+        id: ver
+        run: echo "name=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_OUTPUT"
+
+      # Every push to main publishes/updates the release for the current versionName.
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.name }}
+          name: PDFWriter v${{ steps.ver.outputs.name }}
+          target_commitish: ${{ github.sha }}
           files: out/PDFWriter.apk
-          generate_release_notes: true
+          make_latest: true
+          body: |
+            ดาวน์โหลด **PDFWriter.apk** ด้านล่าง แล้วเปิดบนมือถือ/แท็บเล็ตเพื่อติดตั้ง
+            - นิ้ว = เลื่อนหน้า, S Pen = เขียน
+            - กดปุ่มข้างปากกาค้างไว้ = ยางลบ
+            - บันทึกอัตโนมัติ ปิดแอปได้เลย
