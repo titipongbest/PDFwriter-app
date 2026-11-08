@@ -490,8 +490,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         })
 
         // Colors: tap = use, tap the selected one again or long-press = edit.
-        val dot = (28 * density).toInt()
-        val gap = (6 * density).toInt()
+        val dot = (34 * density).toInt()
+        val gap = (4 * density).toInt()
         DEFAULT_COLORS.indices.forEach { i ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
@@ -602,12 +602,35 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         colorViews.forEachIndexed { i, v ->
             v.visibility = if (i < palette.size) View.VISIBLE else View.GONE
             if (i >= palette.size) return@forEachIndexed
-            v.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(palette[i])
-                if (i == colorIndex) setStroke((3 * density).toInt(), Color.parseColor("#F59E0B"))
-                else setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
+            v.background = swatch(palette[i], i == colorIndex)
+        }
+    }
+
+    /**
+     * A color swatch. Selected: a smaller dot inside a gray rounded square, so the chosen color is
+     * obvious. Not selected: a plain full-size dot.
+     */
+    private fun swatch(color: Int, selected: Boolean): android.graphics.drawable.Drawable {
+        val dot = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
+        }
+        if (!selected) {
+            return android.graphics.drawable.LayerDrawable(arrayOf(dot)).apply {
+                val inset = (2 * density).toInt()
+                setLayerInset(0, inset, inset, inset, inset)
             }
+        }
+        val frame = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 6 * density
+            setColor(Color.parseColor("#F1F5F9"))
+            setStroke((2 * density).toInt(), Color.parseColor("#6B7280"))
+        }
+        return android.graphics.drawable.LayerDrawable(arrayOf(frame, dot)).apply {
+            val inset = (8 * density).toInt()
+            setLayerInset(1, inset, inset, inset, inset)
         }
     }
 
@@ -1922,8 +1945,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         hlColorIndex = prefs.getInt(PREF_HL_COLOR, 0).coerceIn(0, markupPalette.size - 1)
 
-        val dot = (28 * density).toInt()
-        val gap = (6 * density).toInt()
+        val dot = (34 * density).toInt()
+        val gap = (4 * density).toInt()
         markupPalette.indices.forEach { i ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
@@ -1985,12 +2008,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         hlColorIndex = index
         prefs.edit().putInt(PREF_HL_COLOR, index).apply()
         hlColorViews.forEachIndexed { i, v ->
-            v.background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(markupPalette[i])
-                if (i == hlColorIndex) setStroke((3 * density).toInt(), Color.parseColor("#2563EB"))
-                else setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
-            }
+            v.background = swatch(markupPalette[i], i == hlColorIndex)
         }
     }
 
