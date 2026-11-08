@@ -53,7 +53,7 @@ class OcrThaiTest {
         val out1 = File(dir, "ocr1.pdf")
         PdfAnnotationIO.addTextLayer(src, mapOf(0 to words), out1)
         val text1 = PdfAnnotationIO.extractText(out1)[0]
-        Perf.log("ocr-test layer tones=${tones(text1)} font=${PdfAnnotationIO.bundledThaiFont} text=$text1")
+        Perf.log("ocr-test layer tones=${tones(text1)}/${tones(truth)} words=${words.size} font=${PdfAnnotationIO.bundledThaiFont} text=$text1")
 
         // OCR the same page again: the old layer must be replaced, not doubled.
         val out2 = File(dir, "ocr2.pdf")

@@ -47,8 +47,39 @@ class OcrEngine(context: Context) : Closeable {
             it.delete()
             api.clear()
         }
-        return words
+        return mergeThai(words)
     }
+
+    /**
+     * Tesseract often returns Thai as tiny pieces: single letters, and tone marks / vowels above or
+     * below as separate "words". Written into the PDF like that, the marks (zero width on their
+     * own) were lost and copied text had spaces between letters. Joins them back: a piece made only
+     * of combining marks goes into the previous word; touching Thai pieces on the same line are joined.
+     */
+    private fun mergeThai(input: List<Word>): List<Word> {
+        val out = ArrayList<Word>(input.size)
+        for (w in input) {
+            val prev = out.lastOrNull()
+            if (prev != null) {
+                val marksOnly = w.text.all { Character.getType(it) == Character.NON_SPACING_MARK.toInt() }
+                val sameLine = overlapY(prev.box, w.box) > 0.4f * minOf(prev.box.height(), w.box.height())
+                val h = maxOf(prev.box.height(), w.box.height())
+                val touching = w.box.left - prev.box.right < 0.35f * h
+                if (marksOnly || (sameLine && touching && isThai(prev.text.last()) && isThai(w.text.first()))) {
+                    val box = RectF(prev.box).apply { union(w.box) }
+                    out[out.size - 1] = Word(prev.text + w.text, box)
+                    continue
+                }
+            }
+            out.add(w)
+        }
+        return out
+    }
+
+    private fun overlapY(a: RectF, b: RectF): Float = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+
+    private fun isThai(c: Char): Boolean = c in '\u0e00'..'\u0e7f'
+
 
     /** Asks a running [recognize] to stop early (safe from another thread). */
     fun stop() = api.stop()

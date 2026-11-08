@@ -520,9 +520,9 @@ object PdfAnnotationIO {
                             for ((font, str) in runs) {
                                 natural += try { font.getStringWidth(str) / 1000f * size } catch (e: Exception) { 0f }
                             }
-                            if (natural <= 0f) continue
                             // Stretch the text so it covers the word's box (for selection / highlights).
-                            cs.setHorizontalScaling((boxW / natural * 100f).coerceIn(10f, 1000f))
+                            // Zero width (e.g. only tone marks) is still written, unstretched.
+                            cs.setHorizontalScaling(if (natural > 0f) (boxW / natural * 100f).coerceIn(10f, 1000f) else 100f)
                             val x = geo.upX(w.box.left)
                             val baseline = geo.upY(w.box.bottom) + boxH * 0.15f
                             cs.setTextMatrix(Matrix.getTranslateInstance(x, baseline))
