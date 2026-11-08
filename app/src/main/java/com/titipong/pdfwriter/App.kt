@@ -10,6 +10,19 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         PDFBoxResourceLoader.init(applicationContext)
+        // Thai font bundled with the app (Noto Sans Thai, OFL) for text written into PDFs: system
+        // Thai fonts differ by device and some lack characters (e.g. tone marks were dropped).
+        try {
+            val f = java.io.File(filesDir, "fonts/NotoSansThai-Regular.ttf")
+            if (!f.exists()) {
+                f.parentFile?.mkdirs()
+                val tmp = java.io.File(f.path + ".tmp")
+                assets.open("fonts/NotoSansThai-Regular.ttf").use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                tmp.renameTo(f)
+            }
+            com.titipong.pdfwriter.pdf.PdfAnnotationIO.bundledThaiFont = f
+        } catch (e: Exception) {
+        }
     }
 
     companion object {

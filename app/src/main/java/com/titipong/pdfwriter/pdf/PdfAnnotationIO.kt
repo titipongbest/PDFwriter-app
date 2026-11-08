@@ -77,6 +77,10 @@ object PdfAnnotationIO {
     private val PW_SIZE = COSName.getPDFName("PWSize")
     private val PW_BOOKMARK = COSName.getPDFName("PWBookmark")
     private val PW_OCR = COSName.getPDFName("PWOcr")
+
+    /** Thai font shipped with the app (set by App); used before any system font. */
+    @Volatile
+    var bundledThaiFont: File? = null
     private val PREV = COSName.getPDFName("Prev")
     private val NEXT = COSName.getPDFName("Next")
     private val PARENT = COSName.getPDFName("Parent")
@@ -499,7 +503,10 @@ object PdfAnnotationIO {
                     if (list.isNullOrEmpty()) continue
                     val geo = PageGeometry.of(page)
                     if (geo.displayWidth <= 0f) continue
+                    // OCR again: replace this app's earlier text layer instead of stacking a second one.
+                    if (page.cosObject.getBoolean(PW_OCR, false)) removeOcrLayer(page)
                     PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
+                        cs.beginMarkedContent(PW_OCR)
                         cs.transform(geo.displayUpMatrix())
                         cs.beginText()
                         cs.setRenderingMode(RenderingMode.NEITHER) // invisible
@@ -525,11 +532,35 @@ object PdfAnnotationIO {
                             }
                         }
                         cs.endText()
+                        cs.endMarkedContent()
                     }
                     page.cosObject.setBoolean(PW_OCR, true)
                 }
                 doc.save(out)
             }
+        }
+    }
+
+    /**
+     * Empties the content stream(s) holding this app's OCR text layer on [page]: tagged
+     * "/PWOcr BMC", or (older versions) an appended stream of invisible text only. The stream keeps
+     * its leading "Q" so the page's graphics state stays balanced.
+     */
+    private fun removeOcrLayer(page: PDPage) {
+        val contents = page.cosObject.getDictionaryObject(COSName.CONTENTS) as? COSArray ?: return
+        for (i in 1 until contents.size()) {
+            val stream = contents.getObject(i) as? com.tom_roush.pdfbox.cos.COSStream ?: continue
+            val text = try {
+                stream.createInputStream().use { it.readBytes() }.toString(Charsets.ISO_8859_1)
+            } catch (e: Exception) {
+                continue
+            }
+            val trimmed = text.trimStart()
+            val tagged = text.contains("/PWOcr BMC")
+            val legacy = trimmed.startsWith("Q") && text.contains("3 Tr") && text.contains("BT") &&
+                !Regex("""\s(Do|re|f|S|sh)\s""").containsMatchIn(text)
+            if (!tagged && !legacy) continue
+            stream.createOutputStream(COSName.FLATE_DECODE).use { it.write("Q\n".toByteArray(Charsets.ISO_8859_1)) }
         }
     }
 
@@ -765,6 +796,7 @@ object PdfAnnotationIO {
     private class FontSet(private val doc: PDDocument) {
         private val fonts: List<PDFont> by lazy {
             val list = ArrayList<PDFont>()
+            bundledThaiFont?.let { load(it) }?.let { list.add(it) }
             thaiFontFile()?.let { load(it) }?.let { list.add(it) }
             load(File("/system/fonts/Roboto-Regular.ttf"))?.let { list.add(it) }
             list.add(PDType1Font.HELVETICA)
