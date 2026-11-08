@@ -173,7 +173,7 @@
     <string name="selected_pages_n">%1$d selected</string>
     <string name="about">About PDFWriter</string>
     <string name="credit_line">PDFWriter v%1$s · by NorthXbar</string>
-    <string name="about_message">Version %1$s\n\nby NorthXbar</string>
+    <string name="about_message">Version %1$s\n\nby NorthXbar\n\nPage rendering: MuPDF (AGPL-3.0)\nSource code: github.com/titipongbest/PDFwriter-app</string>
     <string name="edit">Edit</string>
     <string name="edit_text_title">Edit text</string>
     <string name="text_size_value">Size %1$s</string>

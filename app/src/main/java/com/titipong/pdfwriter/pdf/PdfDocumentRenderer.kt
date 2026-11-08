@@ -4,20 +4,24 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.RectF
-import android.graphics.pdf.PdfRenderer
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelFileDescriptor
 import android.util.LruCache
+import com.artifex.mupdf.fitz.Cookie
+import com.artifex.mupdf.fitz.Document
+import com.artifex.mupdf.fitz.Matrix
+import com.artifex.mupdf.fitz.android.AndroidDrawDevice
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.IOException
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -30,13 +34,14 @@ private class PageKey(val page: Int) : AbstractCoroutineContextElement(PageKey) 
 }
 
 /**
- * The one thread that touches the PdfRenderer. Work is picked by priority, not arrival:
+ * Render worker threads (one per CPU core used). Each worker has its own copy of the open document,
+ * so pages render in parallel. Work is picked by priority, not arrival:
  * 1. pages on screen, nearest to the page being read ([focus]) first;
  * 2. background work for pages (pre-rendering), again nearest first;
- * 3. other background work (measuring, cropping, OCR).
- * The order is decided when the thread takes the next job, so scrolling re-prioritises at once.
+ * 3. other background work (cropping, OCR).
+ * The order is decided when a worker takes its next job, so scrolling re-prioritises at once.
  */
-private class RenderLanes {
+private class RenderLanes(threads: Int, private val onWorkerExit: () -> Unit) {
     private class Task(val r: Runnable, val urgent: Boolean, val page: Int)
 
     private val lock = Object()
@@ -48,12 +53,14 @@ private class RenderLanes {
     var focus = 0
 
     init {
-        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY + 1 }.start()
+        repeat(threads) { i ->
+            Thread({ loop() }, "pdf-render-$i").apply { priority = Thread.NORM_PRIORITY + 1 }.start()
+        }
     }
 
     private fun rank(t: Task, focus: Int): Long {
         val tier = when {
-            t.urgent && t.page < 0 -> 0L      // opening the document
+            t.urgent && t.page < 0 -> 0L
             t.urgent -> 1L
             t.page >= 0 -> 2L
             else -> 3L
@@ -63,23 +70,27 @@ private class RenderLanes {
     }
 
     private fun loop() {
-        while (true) {
-            val r: Runnable = synchronized(lock) {
-                while (tasks.isEmpty() && !stopped) lock.wait()
-                if (tasks.isEmpty()) return
-                val f = focus
-                var best = 0
-                var bestRank = Long.MAX_VALUE
-                for (i in tasks.indices) {
-                    val k = rank(tasks[i], f)
-                    if (k < bestRank) {   // ties: the oldest wins
-                        bestRank = k
-                        best = i
+        try {
+            while (true) {
+                val r: Runnable = synchronized(lock) {
+                    while (tasks.isEmpty() && !stopped) lock.wait()
+                    if (tasks.isEmpty()) return
+                    val f = focus
+                    var best = 0
+                    var bestRank = Long.MAX_VALUE
+                    for (i in tasks.indices) {
+                        val k = rank(tasks[i], f)
+                        if (k < bestRank) {   // ties: the oldest wins
+                            bestRank = k
+                            best = i
+                        }
                     }
+                    tasks.removeAt(best).r
                 }
-                tasks.removeAt(best).r
+                try { r.run() } catch (t: Throwable) { }
             }
-            try { r.run() } catch (t: Throwable) { }
+        } finally {
+            onWorkerExit()
         }
     }
 
@@ -95,11 +106,11 @@ private class RenderLanes {
         Dispatchers.Default.dispatch(EmptyCoroutineContext, r)
     }
 
-    /** Stops the thread once the queue is empty. */
+    /** Stops the workers once the queue is empty. */
     fun stop() {
         synchronized(lock) {
             stopped = true
-            lock.notify()
+            lock.notifyAll()
         }
     }
 
@@ -114,20 +125,17 @@ private class RenderLanes {
 }
 
 /**
- * Wraps the platform PdfRenderer. All renderer access happens on one thread.
+ * Renders PDF pages with MuPDF, on several CPU cores at once.
  *
- * Speed:
- * - Page sizes aren't all measured up front (opening a page parses its whole content, slow for big
- *   files). Unknown pages assume the first page's size until they're opened; sizes are remembered.
+ * - Page sizes are read once and remembered for the next time the file is opened.
  * - Rendered pages are kept in memory, as small previews, and as images on disk.
+ * - A render that is no longer needed (page scrolled away) is stopped part-way.
+ * - Only the page content is drawn; annotations are drawn by the app on top (as before).
  */
 class PdfDocumentRenderer private constructor(
-    private val pfd: ParcelFileDescriptor,
-    private val renderer: PdfRenderer,
-    private val lanes: RenderLanes,
-    /** height / width for every page (estimated for pages not opened yet) */
+    private val file: File,
+    /** height / width for every page */
     val aspects: FloatArray,
-    private val known: BooleanArray,
     /** Rendered pages are kept here as images, so a page seen once loads instantly afterwards. */
     private val diskDir: File?
 ) {
@@ -135,6 +143,14 @@ class PdfDocumentRenderer private constructor(
 
     @Volatile
     private var closed = false
+
+    /** Each worker thread's own copy of the document (MuPDF documents are single-threaded). */
+    private val threadDoc = ThreadLocal<Document?>()
+
+    private val lanes = RenderLanes(WORKERS) {
+        try { threadDoc.get()?.destroy() } catch (e: Throwable) { }
+        threadDoc.set(null)
+    }
 
     /** The page being read: its rendering goes first, then the pages nearest to it. */
     var focusPage: Int
@@ -146,10 +162,8 @@ class PdfDocumentRenderer private constructor(
 
     private val main = Handler(Looper.getMainLooper())
 
-    // Page images live in native memory; keep the cache modest so rendering more pages doesn't fail.
-    private val cache = object : LruCache<Int, Bitmap>(
-        (160L * 1024 * 1024).toInt()
-    ) {
+    // Page images live in native memory.
+    private val cache = object : LruCache<Int, Bitmap>((160L * 1024 * 1024).toInt()) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
 
@@ -157,6 +171,9 @@ class PdfDocumentRenderer private constructor(
     private val previews = object : LruCache<Int, Bitmap>(64 * 1024 * 1024) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
+
+    private fun doc(): Document =
+        threadDoc.get() ?: Document.openDocument(file.path).also { threadDoc.set(it) }
 
     /** The best image already in memory for [index] (no rendering). */
     fun peek(index: Int): Bitmap? = cache.get(index)?.takeIf { !it.isRecycled }
@@ -170,17 +187,6 @@ class PdfDocumentRenderer private constructor(
             val small = Bitmap.createScaledBitmap(bmp, w, h, true).copy(Bitmap.Config.RGB_565, false)
             if (small != null) previews.put(index, small)
         } catch (e: Throwable) { }
-    }
-
-    /** Records the real size of a page that is open. Renderer thread only. */
-    private fun learnAspect(index: Int, page: PdfRenderer.Page) {
-        if (known[index]) return
-        known[index] = true
-        val real = page.height.toFloat() / page.width.toFloat().coerceAtLeast(1f)
-        if (abs(real - aspects[index]) > 0.002f) {
-            aspects[index] = real
-            main.post { if (!closed) onAspectChanged?.invoke(index) }
-        }
     }
 
     private fun diskFile(index: Int): File? = diskDir?.let { File(it, "$index.jpg") }
@@ -204,7 +210,7 @@ class PdfDocumentRenderer private constructor(
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 f.parentFile?.mkdirs()
-                val tmp = File(f.path + ".tmp")
+                val tmp = File(f.path + "." + Thread.currentThread().id + ".tmp")
                 tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
                 if (!tmp.renameTo(f)) tmp.delete()
             } catch (e: Throwable) { }
@@ -232,6 +238,60 @@ class PdfDocumentRenderer private constructor(
     }
 
     /**
+     * Draws page [index] into a new [width]-pixel-wide bitmap with this thread's document.
+     * Stops early (returns null) if the calling coroutine is cancelled meanwhile.
+     */
+    @OptIn(InternalCoroutinesApi::class)
+    private suspend fun draw(index: Int, width: Int): Bitmap? {
+        val cookie = Cookie()
+        val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val handle = coroutineContext[Job]?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) {
+            aborted.set(true)
+            try { cookie.abort() } catch (e: Throwable) { }
+        }
+        try {
+            val page = doc().loadPage(index)
+            try {
+                val b = page.bounds
+                val pw = (b.x1 - b.x0).coerceAtLeast(1f)
+                val ph = (b.y1 - b.y0).coerceAtLeast(1f)
+                val real = ph / pw
+                if (abs(real - aspects[index]) > 0.002f) {
+                    aspects[index] = real
+                    main.post { if (!closed) onAspectChanged?.invoke(index) }
+                }
+                val h = (width * real).toInt().coerceAtLeast(1)
+                val bmp = try {
+                    Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
+                } catch (oom: OutOfMemoryError) {
+                    cache.evictAll()
+                    return null
+                }
+                bmp.eraseColor(Color.WHITE)
+                val s = width / pw
+                val ctm = Matrix(s, 0f, 0f, s, -b.x0 * s, -b.y0 * s)
+                val dev = AndroidDrawDevice(bmp, 0, 0)
+                try {
+                    page.runPageContents(dev, ctm, cookie)
+                    dev.close()
+                } finally {
+                    dev.destroy()
+                }
+                if (aborted.get()) {
+                    bmp.recycle()
+                    return null
+                }
+                return bmp
+            } finally {
+                page.destroy()
+            }
+        } finally {
+            handle?.dispose()
+            cookie.destroy()
+        }
+    }
+
+    /**
      * A sharp-enough image already made (memory or disk), without rendering: shown first while a
      * sharper one (e.g. for zoom) is rendered. Null if there is none at [minWidth].
      */
@@ -248,96 +308,30 @@ class PdfDocumentRenderer private constructor(
 
     suspend fun render(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? =
         withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
-        if (closed || index !in 0 until pageCount) return@withContext null
-        val w = targetWidth.coerceIn(300, MAX_WIDTH)
-        val cached = cache.get(index)
-        if (cached != null && cached.width >= w * FIT) return@withContext cached
-        loadFromDisk(index, w)?.let {
-            cache.put(index, it)
-            keepPreview(index, it)
-            return@withContext it
-        }
-        val page = renderer.openPage(index)
-        try {
-            learnAspect(index, page)
-            val h = (w * aspects[index]).toInt().coerceAtLeast(1)
-            val bmp = try {
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            } catch (oom: OutOfMemoryError) {
-                cache.evictAll()
-                return@withContext null
+            if (closed || index !in 0 until pageCount) return@withContext null
+            val w = targetWidth.coerceIn(300, MAX_WIDTH)
+            val cached = cache.get(index)
+            if (cached != null && cached.width >= w * FIT) return@withContext cached
+            loadFromDisk(index, w)?.let {
+                cache.put(index, it)
+                keepPreview(index, it)
+                return@withContext it
             }
-            bmp.eraseColor(Color.WHITE)
-            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            val bmp = draw(index, w) ?: return@withContext null
             cache.put(index, bmp)
             keepPreview(index, bmp)
             // Small thumbnails (page overview) aren't worth storing; keep the sharpest one on disk.
             if (w >= 600 && w > diskWidth(index)) saveToDisk(index, bmp)
             bmp
-        } finally {
-            page.close()
         }
-    }
 
-    /**
-     * Measures the pages not opened yet, a few at a time so on-screen pages still render first,
-     * then remembers all sizes for the next time this file is opened.
-     */
-    suspend fun measureAll() {
-        var i = 0
-        while (i < pageCount && !closed) {
-            coroutineContext.ensureActive()
-            val from = i
-            withContext(lanes.background) {
-                var n = 0
-                var j = from
-                while (j < pageCount && n < 2 && !closed) {
-                    if (!known[j]) {
-                        val p = renderer.openPage(j)
-                        try { learnAspect(j, p) } finally { p.close() }
-                        n++
-                    }
-                    j++
-                }
-                i = j
-            }
-        }
-        if (!closed) withContext(Dispatchers.IO) { saveAspects() }
-    }
-
-    private fun saveAspects() {
-        val dir = diskDir ?: return
-        if (known.any { !it }) return
-        try {
-            dir.mkdirs()
-            val tmp = File(dir, "$ASPECTS_FILE.tmp")
-            DataOutputStream(tmp.outputStream().buffered()).use { out ->
-                out.writeInt(aspects.size)
-                aspects.forEach { out.writeFloat(it) }
-            }
-            tmp.renameTo(File(dir, ASPECTS_FILE))
-        } catch (e: Throwable) { }
-    }
+    /** Page sizes are all read when the document opens; kept for callers. */
+    suspend fun measureAll() {}
 
     /** Renders a page at [width] pixels without caching (for OCR). Caller recycles the bitmap. */
     suspend fun renderUncached(index: Int, width: Int): Bitmap? = withContext(lanes.background) {
         if (closed || index !in 0 until pageCount) return@withContext null
-        val page = renderer.openPage(index)
-        try {
-            learnAspect(index, page)
-            val h = (width * aspects[index]).toInt().coerceAtLeast(1)
-            val bmp = try {
-                Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
-            } catch (oom: OutOfMemoryError) {
-                cache.evictAll()
-                return@withContext null
-            }
-            bmp.eraseColor(Color.WHITE)
-            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-            bmp
-        } finally {
-            page.close()
-        }
+        draw(index, width)
     }
 
     /**
@@ -347,22 +341,8 @@ class PdfDocumentRenderer private constructor(
     suspend fun contentBounds(index: Int): RectF? = withContext(lanes.background) {
         if (closed || index !in 0 until pageCount) return@withContext null
         val w = 220
-        val page = renderer.openPage(index)
-        val bmp: Bitmap
-        val h: Int
-        try {
-            learnAspect(index, page)
-            h = (w * aspects[index]).toInt().coerceAtLeast(1)
-            bmp = try {
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            } catch (oom: OutOfMemoryError) {
-                return@withContext null
-            }
-            bmp.eraseColor(Color.WHITE)
-            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-        } finally {
-            page.close()
-        }
+        val bmp = draw(index, w) ?: return@withContext null
+        val h = bmp.height
         val px = IntArray(w * h)
         bmp.getPixels(px, 0, w, 0, 0, w, h)
         bmp.recycle()
@@ -399,13 +379,9 @@ class PdfDocumentRenderer private constructor(
         if (closed) return
         closed = true
         onAspectChanged = null
-        lanes.post(Runnable {
-            try { renderer.close() } catch (e: Exception) { }
-            try { pfd.close() } catch (e: Exception) { }
-            cache.evictAll()
-            previews.evictAll()
-            lanes.stop()
-        }, urgent = false)
+        lanes.stop()
+        cache.evictAll()
+        previews.evictAll()
     }
 
     companion object {
@@ -415,6 +391,8 @@ class PdfDocumentRenderer private constructor(
         private const val FIT = 0.9f
         private const val DISK_LIMIT = 400L * 1024 * 1024
         private const val ASPECTS_FILE = "aspects.bin"
+        /** Render threads: half the CPU cores, 2 to 4. */
+        private val WORKERS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
 
         /**
          * The page-image folder for this exact version of [file] (any change to the file gets a new
@@ -454,39 +432,40 @@ class PdfDocumentRenderer private constructor(
             }
         }
 
-        suspend fun open(pfd: ParcelFileDescriptor, diskDir: File? = null): PdfDocumentRenderer {
-            val lanes = RenderLanes()
+        private fun saveAspects(dir: File?, aspects: FloatArray) {
+            dir ?: return
             try {
-                return withContext(lanes.urgent) {
-                    val r = PdfRenderer(pfd)
-                    val count = r.pageCount
-                    val saved = loadAspects(diskDir, count)
-                    val aspects: FloatArray
-                    val known: BooleanArray
-                    if (saved != null) {
-                        aspects = saved
-                        known = BooleanArray(count) { true }
-                    } else {
-                        // Only the first page is opened now; the rest are measured later.
-                        known = BooleanArray(count)
-                        var first = 1.4142f
-                        if (count > 0) {
-                            val p = r.openPage(0)
-                            try {
-                                first = p.height.toFloat() / p.width.toFloat().coerceAtLeast(1f)
-                            } finally {
-                                p.close()
-                            }
-                            known[0] = true
-                        }
-                        aspects = FloatArray(count) { first }
-                    }
-                    PdfDocumentRenderer(pfd, r, lanes, aspects, known, diskDir)
+                dir.mkdirs()
+                val tmp = File(dir, "$ASPECTS_FILE.tmp")
+                DataOutputStream(tmp.outputStream().buffered()).use { out ->
+                    out.writeInt(aspects.size)
+                    aspects.forEach { out.writeFloat(it) }
                 }
-            } catch (e: Exception) {
-                lanes.stop()
-                try { pfd.close() } catch (ignored: Exception) { }
-                throw e
+                tmp.renameTo(File(dir, ASPECTS_FILE))
+            } catch (e: Throwable) { }
+        }
+
+        suspend fun open(file: File, diskDir: File? = null): PdfDocumentRenderer = withContext(Dispatchers.IO) {
+            val d = try {
+                Document.openDocument(file.path)
+            } catch (e: Throwable) {
+                throw IOException("Cannot open PDF", e)
+            }
+            try {
+                if (d.needsPassword()) throw IOException("Password protected")
+                val count = d.countPages()
+                val aspects = loadAspects(diskDir, count) ?: FloatArray(count) { i ->
+                    val p = d.loadPage(i)
+                    try {
+                        val b = p.bounds
+                        (b.y1 - b.y0) / (b.x1 - b.x0).coerceAtLeast(1f)
+                    } finally {
+                        p.destroy()
+                    }
+                }.also { saveAspects(diskDir, it) }
+                PdfDocumentRenderer(file, aspects, diskDir)
+            } finally {
+                d.destroy()
             }
         }
     }
