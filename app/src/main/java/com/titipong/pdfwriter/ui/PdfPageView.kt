@@ -701,9 +701,13 @@ class PdfPageView(context: Context) : View(context) {
         val x = pt[0]
         val y = pt[1]
         val rn = eraserRadius / s
+        // Stroke mode: a stroke is hit anywhere along its line, not only at its points (a straightened
+        // highlighter line has just its two ends, so touching its middle used to miss).
         val strokesRemoved = if (h.eraserPixelMode) erasePixels(a, x, y, rn) else a.strokes.removeAll { st ->
             val reach = rn + st.width / 2f
-            st.points.any { p -> hypot(p.x - x, p.y - y) < reach }
+            val pts = st.points
+            pts.any { p -> hypot(p.x - x, p.y - y) < reach } ||
+                (1 until pts.size).any { segDist(pts[it - 1], pts[it], x, y) < reach }
         }
         // The eraser only removes pen / highlighter ink. Text notes and text highlights / underlines
         // are deleted by tapping them (text tool / view mode).
