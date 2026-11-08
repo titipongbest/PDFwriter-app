@@ -760,16 +760,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             val pos = gridAdapter?.insertBlank() ?: return@setOnClickListener
             binding.pagesGrid.scrollToPosition(pos)
         }
-        binding.btnDeletePages.setOnClickListener {
-            val g = gridAdapter ?: return@setOnClickListener
-            if (!g.deleteSelected()) Toast.makeText(this, R.string.cannot_delete_all, Toast.LENGTH_SHORT).show()
-        }
+        // One button for the selected pages; its actions open as a vertical list.
+        binding.btnDeletePages.setOnClickListener { showPageActions() }
         binding.btnApplyEdit.setOnClickListener { onApplyEdit() }
         binding.btnSelectAll.setOnClickListener { gridAdapter?.selectAll() }
-        binding.btnDuplicatePages.setOnClickListener {
-            val n = gridAdapter?.duplicateSelected() ?: 0
-            if (n > 0) Toast.makeText(this, getString(R.string.pages_duplicated, n), Toast.LENGTH_SHORT).show()
-        }
 
         binding.bookmarksList.layoutManager = LinearLayoutManager(this)
         bookmarkAdapter = BookmarkAdapter(
@@ -874,9 +868,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val g = gridAdapter
         val n = g?.selected?.size ?: 0
         binding.btnDeletePages.visibility = if (g?.editMode == true && n > 0) View.VISIBLE else View.GONE
-        binding.btnDeletePages.text = getString(R.string.delete_pages_n, n)
-        binding.btnDuplicatePages.visibility = binding.btnDeletePages.visibility
-        binding.btnDuplicatePages.text = getString(R.string.duplicate_pages_n, n)
+        binding.btnDeletePages.text = getString(R.string.selected_pages_n, n)
+        binding.btnDuplicatePages.visibility = View.GONE
         if (g?.pickMode == true) {
             binding.btnDeletePages.visibility = View.GONE
             binding.btnDuplicatePages.visibility = View.GONE
@@ -884,6 +877,27 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         } else {
             binding.btnApplyEdit.setText(R.string.save)
         }
+    }
+
+    private fun showPageActions() {
+        val g = gridAdapter ?: return
+        val n = g.selected.size
+        if (n == 0) return
+        val popup = android.widget.PopupMenu(this, binding.btnDeletePages)
+        popup.menu.add(0, 1, 0, getString(R.string.duplicate_pages_n, n)).setIcon(R.drawable.ic_copy)
+        popup.menu.add(0, 2, 1, getString(R.string.delete_pages_n, n)).setIcon(R.drawable.ic_delete)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) popup.setForceShowIcon(true)
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                1 -> {
+                    val added = g.duplicateSelected()
+                    if (added > 0) Toast.makeText(this, getString(R.string.pages_duplicated, added), Toast.LENGTH_SHORT).show()
+                }
+                2 -> if (!g.deleteSelected()) Toast.makeText(this, R.string.cannot_delete_all, Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
+        popup.show()
     }
 
     private fun cancelEdit() {
@@ -2012,8 +2026,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             ctl.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         }
     }
-
-    private fun selectionRange(): Pair<Int, Int> =
 
     private fun selectionRange(): Pair<Int, Int> =
         if (selFocus >= selAnchorStart) selAnchorStart to maxOf(selAnchorEnd, selFocus)

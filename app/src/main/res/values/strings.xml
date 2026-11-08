@@ -170,4 +170,5 @@
     <string name="size_dialog_title">ขนาดเส้น (0.1 – 10.0)</string>
     <string name="size_invalid">ใส่ตัวเลข 0.1 ถึง 10.0</string>
     <string name="close_tab">ปิดแท็บ</string>
+    <string name="selected_pages_n">%1$d หน้าที่เลือก</string>
 </resources>

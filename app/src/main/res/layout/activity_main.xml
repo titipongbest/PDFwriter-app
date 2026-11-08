@@ -485,12 +485,12 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDeletePages"
-                    style="@style/Widget.Material3.Button.TextButton"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/delete_pages"
-                    android:textColor="#DC2626"
-                    android:visibility="gone" />
+                    android:visibility="gone"
+                    app:icon="@drawable/ic_chevron_down"
+                    app:iconGravity="textEnd" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnCancelEdit"
