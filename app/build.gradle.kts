@@ -19,11 +19,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release key: given by CI from the repository secrets SIGNING_KEYSTORE_B64 / SIGNING_PASSWORD
+    // (env SIGNING_KEYSTORE = path of the decoded .jks). Never commit the .jks.
+    val releaseKeystore = System.getenv("SIGNING_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("SIGNING_PASSWORD")
+                keyAlias = System.getenv("SIGNING_ALIAS") ?: "pdfwriter"
+                keyPassword = System.getenv("SIGNING_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the APK installs directly. Use a real keystore for Play Store.
-            signingConfig = signingConfigs.getByName("debug")
+            // Release key when available; otherwise the debug key (so the APK still installs).
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

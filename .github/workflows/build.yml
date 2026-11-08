@@ -24,10 +24,29 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Release signing key from repository secrets (if set; otherwise the debug key is used).
+      - name: Set up signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$SIGNING_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "SIGNING_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "SIGNING_PASSWORD=$SIGNING_PASSWORD" >> "$GITHUB_ENV"
+            echo "Signing with the release key"
+          else
+            echo "No signing secrets: release APK uses the debug key"
+          fi
+
       - name: Build debug and release APKs
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Show signing certificate
+        run: |
+          "$(ls -d "$ANDROID_HOME"/build-tools/* | tail -1)/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk | grep -E "DN|SHA-256" || true
 
       - name: Read version
         id: ver
