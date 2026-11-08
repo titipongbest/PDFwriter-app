@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Bitmap
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -51,6 +52,7 @@ import com.titipong.pdfwriter.model.OutlineEntry
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.TextHighlight
 import com.titipong.pdfwriter.model.TextNote
+import com.titipong.pdfwriter.model.ImageNote
 import com.titipong.pdfwriter.ocr.OcrEngine
 import com.titipong.pdfwriter.search.SearchIndex
 import com.titipong.pdfwriter.pdf.PdfAnnotationIO
@@ -91,7 +93,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         DrawTool.PEN to ToolSetting(DEFAULT_COLORS.toMutableList(), 1, 30),
         DrawTool.HIGHLIGHTER to ToolSetting(HIGHLIGHTER_INK_COLORS.toMutableList(), 0, 30),
         DrawTool.TEXT to ToolSetting(DEFAULT_COLORS.toMutableList(), 0, 30),
-        DrawTool.ERASER to ToolSetting(mutableListOf(), 0, 40)
+        DrawTool.ERASER to ToolSetting(mutableListOf(), 0, 40),
+        DrawTool.IMAGE to ToolSetting(mutableListOf(), 0, 30)
     )
     private val cur: ToolSetting get() = toolSettings.getValue(currentTool)
     private val palette: MutableList<Int> get() = cur.palette
@@ -206,6 +209,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private val colorViews = mutableListOf<View>()
     private val density by lazy { resources.displayMetrics.density }
     private val prefs by lazy { getSharedPreferences("pdfwriter", MODE_PRIVATE) }
+
+    /** Image tool: where the picture being picked goes (page, normalized x, y). */
+    private var pendingImageAt: Triple<Int, Float, Float>? = null
+    private val pickImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val at = pendingImageAt
+        pendingImageAt = null
+        if (uri != null && at != null) placeImage(uri, at.first, at.second, at.third)
+    }
 
     private val pickPdf = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) openPdf(uri, remember = persistPermission(uri), silent = false)
@@ -471,6 +482,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.HIGHLIGHTER] = binding.btnHighlight
         toolButtons[DrawTool.ERASER] = binding.btnEraser
         toolButtons[DrawTool.TEXT] = binding.btnText
+        toolButtons[DrawTool.IMAGE] = binding.btnImage
         toolButtons.forEach { (t, v) ->
             v.setOnClickListener {
                 if (t == currentTool && toolOn) {
@@ -615,6 +627,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val hasColors = palette.isNotEmpty()
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
+        // Pictures have no color or size: resize them with their frame.
+        val sized = if (t == DrawTool.IMAGE) View.GONE else View.VISIBLE
+        listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
+            .forEach { it.visibility = sized }
         if (hasColors) selectColor(colorIndex)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
@@ -743,11 +759,22 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             val removed = when (item) {
                 is InkStroke -> pa.strokes.remove(item)
                 is TextNote -> pa.texts.remove(item)
+                is ImageNote -> pa.images.remove(item)
                 is TextHighlight -> pa.highlights.remove(item)
                 is NoteEdit -> {
-                    val i = pa.texts.indexOf(item.after)
-                    if (i >= 0) pa.texts[i] = item.before
-                    i >= 0
+                    val before = item.before
+                    val after = item.after
+                    if (before is TextNote && after is TextNote) {
+                        val i = pa.texts.indexOf(after)
+                        if (i >= 0) pa.texts[i] = before
+                        i >= 0
+                    } else if (before is ImageNote && after is ImageNote) {
+                        val i = pa.images.indexOf(after)
+                        if (i >= 0) pa.images[i] = before
+                        i >= 0
+                    } else {
+                        false
+                    }
                 }
                 else -> false
             }
@@ -771,6 +798,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 pages[page]?.let {
                     it.strokes.clear()
                     it.texts.clear()
+                    it.images.clear()
                 }
                 adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
                 markDirty()
@@ -2293,15 +2321,109 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.selectionBar.visibility = View.GONE
     }
 
-    override fun onNoteChanged(view: PdfPageView, page: Int, before: TextNote, after: TextNote) {
+    override fun onNoteChanged(view: PdfPageView, page: Int, before: Any, after: Any) {
         history.addLast(page to NoteEdit(before, after))
         if (history.size > MAX_HISTORY) history.removeFirst()
         markDirty()
-        onTextTapped(view, page, after) // keep it selected, menu above its new place
+        // Keep it selected, menu above its new place.
+        if (after is TextNote) onTextTapped(view, page, after)
+        if (after is ImageNote) onImageTapped(view, page, after)
     }
 
-    /** Undo record for a text note that was moved / resized / edited. */
-    private class NoteEdit(val before: TextNote, val after: TextNote)
+    /** Undo record for a text note / picture that was moved, resized or edited. */
+    private class NoteEdit(val before: Any, val after: Any)
+
+    private var tappedImage: Pair<Int, ImageNote>? = null
+
+    override fun onImageTapped(view: PdfPageView, page: Int, image: ImageNote) {
+        clearSelection()
+        tappedImage = page to image
+        noteView = view
+        view.editingNote = image // dotted frame: drag to move, corners to resize
+        binding.btnSelCopy.visibility = View.GONE
+        binding.btnSelHighlight.visibility = View.GONE
+        binding.btnSelUnderline.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.GONE
+        binding.btnNoteEdit.visibility = View.GONE
+        binding.btnHlDelete.visibility = View.VISIBLE
+        showBarAt(view, listOf(RectF(image.x, image.y, image.x + image.w, image.y + image.h)))
+    }
+
+    override fun requestImage(page: Int, x: Float, y: Float) {
+        clearSelection()
+        pendingImageAt = Triple(page, x, y)
+        try {
+            pickImage.launch(
+                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        } catch (e: Exception) {
+            pendingImageAt = null
+            Toast.makeText(this, R.string.image_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Copies the picked picture into the app (rotated upright, at most 2000 px, JPEG unless it has
+     * transparency) and places it centered on the tapped spot, 40% of the page width wide.
+     */
+    private fun placeImage(uri: Uri, page: Int, x: Float, y: Float) {
+        lifecycleScope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                try {
+                    val bmp: Bitmap = if (Build.VERSION.SDK_INT >= 28) {
+                        val src = android.graphics.ImageDecoder.createSource(contentResolver, uri)
+                        android.graphics.ImageDecoder.decodeBitmap(src) { dec, info, _ ->
+                            val big = maxOf(info.size.width, info.size.height)
+                            if (big > 2000) {
+                                val f = 2000f / big
+                                dec.setTargetSize((info.size.width * f).toInt(), (info.size.height * f).toInt())
+                            }
+                            dec.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                        }
+                    } else {
+                        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+                        var sample = 1
+                        while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= 2000) sample *= 2
+                        contentResolver.openInputStream(uri)?.use {
+                            android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                        } ?: throw IOException("Cannot read")
+                    }
+                    val dir = File(filesDir, "images").apply { mkdirs() }
+                    val alpha = bmp.hasAlpha()
+                    val f = File(dir, java.util.UUID.randomUUID().toString() + if (alpha) ".png" else ".jpg")
+                    f.outputStream().use {
+                        bmp.compress(if (alpha) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 90, it)
+                    }
+                    Triple(f, bmp.width, bmp.height)
+                } catch (e: Throwable) {
+                    null
+                }
+            }
+            if (saved == null) {
+                Toast.makeText(this@MainActivity, R.string.image_failed, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val (file, iw, ih) = saved
+            val aspect = document?.aspects?.getOrNull(page) ?: 1.414f
+            var w = 0.4f
+            var h = w * ih / iw.coerceAtLeast(1)
+            if (h > aspect * 0.8f) { // very tall picture: fit the page height instead
+                h = aspect * 0.8f
+                w = h * iw / ih.coerceAtLeast(1)
+            }
+            val left = (x - w / 2f).coerceIn(0f, (1f - w).coerceAtLeast(0f))
+            val top = (y - h / 2f).coerceIn(0f, (aspect - h).coerceAtLeast(0f))
+            val note = ImageNote(file.path, left, top, w, h)
+            annotationsFor(page).images.add(note)
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            onItemAdded(page, note)
+            // Select it right away so it can be moved / resized.
+            binding.recycler.post {
+                adapter?.pageViewFor(binding.recycler, page)?.let { onImageTapped(it, page, note) }
+            }
+        }
+    }
 
     private var noteView: PdfPageView? = null
 
@@ -2313,6 +2435,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         selPage = -1
         tappedHighlight = null
         tappedNote = null
+        tappedImage = null
         barAnchor = null
         binding.btnNoteEdit.visibility = View.GONE
         binding.selectionBar.visibility = View.GONE
@@ -2441,6 +2564,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun deleteTappedHighlight() {
+        tappedImage?.let { (page, image) ->
+            pages[page]?.images?.remove(image)
+            clearSelection()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+            return
+        }
         tappedNote?.let { (page, note) ->
             pages[page]?.texts?.remove(note)
             clearSelection()

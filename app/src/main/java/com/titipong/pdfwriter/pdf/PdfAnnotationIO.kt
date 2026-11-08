@@ -39,6 +39,10 @@ import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOut
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.util.Matrix
+import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
+import com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory
+import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
+import com.titipong.pdfwriter.model.ImageNote
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +81,14 @@ object PdfAnnotationIO {
     private val PW_SIZE = COSName.getPDFName("PWSize")
     private val PW_BOOKMARK = COSName.getPDFName("PWBookmark")
     private val PW_OCR = COSName.getPDFName("PWOcr")
+    private val STAMP = COSName.getPDFName("Stamp")
+    private val PW_IMAGE = COSName.getPDFName("PWImage")
+    private val PW_W = COSName.getPDFName("PWW")
+    private val PW_H = COSName.getPDFName("PWH")
+
+    /** Where pictures read from PDFs are stored (set by App). */
+    @Volatile
+    var imagesDir: File? = null
 
     /** Thai font shipped with the app (set by App); used before any system font. */
     @Volatile
@@ -117,6 +129,7 @@ object PdfAnnotationIO {
                         FREE_TEXT -> parseText(d)?.let { pa.texts.add(it) }
                         HIGHLIGHT -> parseHighlight(d, geo, underline = false)?.let { pa.highlights.add(it) }
                         UNDERLINE -> parseHighlight(d, geo, underline = true)?.let { pa.highlights.add(it) }
+                        STAMP -> parseImage(annot)?.let { pa.images.add(it) }
                     }
                 }
                 if (!pa.isEmpty()) result[index] = pa
@@ -260,6 +273,56 @@ object PdfAnnotationIO {
         null
     }
 
+    /** This app's picture (a Stamp annotation marked /PWImage): extracts the image into [imagesDir]. */
+    private fun parseImage(annot: PDAnnotation): ImageNote? = try {
+        val d = annot.cosObject
+        val dir = imagesDir
+        if (!d.getBoolean(PW_IMAGE, false) || dir == null) {
+            null
+        } else {
+            val name = (d.getString(COSName.NM) ?: UUID.randomUUID().toString()).replace(Regex("[^A-Za-z0-9-]"), "_")
+            val png = File(dir, "pdf-$name.png")
+            val jpg = File(dir, "pdf-$name.jpg")
+            // Written by this app on this device: the original picture is still here.
+            val id = name.removePrefix("pdfwriter-")
+            val ownJpg = File(dir, "$id.jpg")
+            val ownPng = File(dir, "$id.png")
+            val file = when {
+                ownJpg.exists() -> ownJpg
+                ownPng.exists() -> ownPng
+                jpg.exists() -> jpg
+                png.exists() -> png
+                else -> {
+                    val res = annot.appearance?.normalAppearance?.appearanceStream?.resources
+                    val img = res?.xObjectNames?.firstNotNullOfOrNull { res.getXObject(it) as? PDImageXObject }
+                    val bmp = img?.image
+                    if (bmp == null) {
+                        null
+                    } else {
+                        dir.mkdirs()
+                        val out = if (bmp.hasAlpha()) png else jpg
+                        out.outputStream().use {
+                            bmp.compress(
+                                if (out === png) android.graphics.Bitmap.CompressFormat.PNG else android.graphics.Bitmap.CompressFormat.JPEG,
+                                92, it
+                            )
+                        }
+                        out
+                    }
+                }
+            }
+            if (file == null) null else ImageNote(
+                file.path,
+                num(d.getDictionaryObject(PW_X)) ?: 0f,
+                num(d.getDictionaryObject(PW_Y)) ?: 0f,
+                num(d.getDictionaryObject(PW_W)) ?: 0.3f,
+                num(d.getDictionaryObject(PW_H)) ?: 0.3f
+            )
+        }
+    } catch (e: Throwable) {
+        null
+    }
+
     private fun readColor(arr: COSArray?): Int {
         if (arr == null) return Color.BLACK
         val c = FloatArray(arr.size()) { num(arr.getObject(it)) ?: 0f }
@@ -282,6 +345,7 @@ object PdfAnnotationIO {
             FREE_TEXT -> d.getBoolean(PW_TEXT, false)
             HIGHLIGHT -> parseHighlight(d, geo, false) != null // unreadable markup is left untouched
             UNDERLINE -> parseHighlight(d, geo, true) != null
+            STAMP -> d.getBoolean(PW_IMAGE, false)
             else -> false
         }
     }
@@ -350,6 +414,7 @@ object PdfAnnotationIO {
                     for (st in snap.strokes) if (st.points.isNotEmpty()) list.add(buildInk(doc, st, geo))
                     for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
                     for (h in snap.highlights) if (h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
+                    for (im in snap.images) buildImage(doc, im, geo)?.let { list.add(it) }
                 }
                 page.annotations = list
             }
@@ -787,6 +852,53 @@ object PdfAnnotationIO {
             annot.appearance = PDAppearanceDictionary().apply { setNormalAppearance(ap) }
         }
         return annot
+    }
+
+    /** A picture as a Stamp annotation whose appearance draws the image (visible in other apps). */
+    private fun buildImage(doc: PDDocument, im: ImageNote, geo: PageGeometry): PDAnnotation? = try {
+        val f = File(im.file)
+        if (!f.exists()) {
+            null
+        } else {
+            val xo: PDImageXObject = if (f.name.endsWith(".jpg", true) || f.name.endsWith(".jpeg", true)) {
+                f.inputStream().use { JPEGFactory.createFromStream(doc, it) }
+            } else {
+                val bmp = android.graphics.BitmapFactory.decodeFile(f.path) ?: throw java.io.IOException("bad image")
+                LosslessFactory.createFromImage(doc, bmp)
+            }
+            val left = geo.upX(im.x)
+            val top = geo.upY(im.y)
+            val right = geo.upX(im.x + im.w)
+            val bottom = geo.upY(im.y + im.h)
+            val corners = listOf(
+                upToUser(geo, left, bottom), upToUser(geo, right, bottom),
+                upToUser(geo, left, top), upToUser(geo, right, top)
+            )
+            val rect = PDRectangle(
+                corners.minOf { it[0] }, corners.minOf { it[1] },
+                corners.maxOf { it[0] } - corners.minOf { it[0] },
+                corners.maxOf { it[1] } - corners.minOf { it[1] }
+            )
+            val d = baseDict(STAMP, rect)
+            d.setString(COSName.NM, "pdfwriter-" + f.nameWithoutExtension.removePrefix("pdf-").removePrefix("pdfwriter-"))
+            d.setBoolean(PW_IMAGE, true)
+            d.setFloat(PW_X, im.x)
+            d.setFloat(PW_Y, im.y)
+            d.setFloat(PW_W, im.w)
+            d.setFloat(PW_H, im.h)
+            val annot = PDAnnotation.createAnnotation(d)
+            val ap = PDAppearanceStream(doc)
+            ap.bBox = rect
+            ap.resources = PDResources()
+            PDPageContentStream(doc, ap).use { cs ->
+                cs.transform(geo.displayUpMatrix())
+                cs.drawImage(xo, left, bottom, right - left, top - bottom)
+            }
+            annot.appearance = PDAppearanceDictionary().apply { setNormalAppearance(ap) }
+            annot
+        }
+    } catch (e: Throwable) {
+        null
     }
 
     private fun upToUser(geo: PageGeometry, ux: Float, uy: Float): FloatArray =

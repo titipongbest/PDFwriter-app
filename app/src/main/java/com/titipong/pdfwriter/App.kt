@@ -23,6 +23,7 @@ class App : Application() {
             com.titipong.pdfwriter.pdf.PdfAnnotationIO.bundledThaiFont = f
         } catch (e: Exception) {
         }
+        com.titipong.pdfwriter.pdf.PdfAnnotationIO.imagesDir = java.io.File(filesDir, "images").apply { mkdirs() }
     }
 
     companion object {

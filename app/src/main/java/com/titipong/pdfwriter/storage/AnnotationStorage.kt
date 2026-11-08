@@ -81,10 +81,21 @@ object AnnotationStorage {
                     put("u", h.underline)
                 })
             }
+            val imgs = JSONArray()
+            for (im in page.images) {
+                imgs.put(JSONObject().apply {
+                    put("f", im.file)
+                    put("x", im.x.toDouble())
+                    put("y", im.y.toDouble())
+                    put("w", im.w.toDouble())
+                    put("h", im.h.toDouble())
+                })
+            }
             val po = JSONObject()
             po.put("s", strokes)
             po.put("t", texts)
             po.put("h", hls)
+            po.put("i", imgs)
             pagesJson.put(index.toString(), po)
         }
         val root = JSONObject()
@@ -187,6 +198,21 @@ object AnnotationStorage {
                             to.getDouble("y").toFloat(),
                             to.getInt("c"),
                             to.getDouble("z").toFloat()
+                        )
+                    )
+                }
+                val imgs = po.optJSONArray("i") ?: JSONArray()
+                for (i in 0 until imgs.length()) {
+                    val io = imgs.getJSONObject(i)
+                    val f = io.getString("f")
+                    if (!java.io.File(f).exists()) continue
+                    page.images.add(
+                        com.titipong.pdfwriter.model.ImageNote(
+                            f,
+                            io.getDouble("x").toFloat(),
+                            io.getDouble("y").toFloat(),
+                            io.getDouble("w").toFloat(),
+                            io.getDouble("h").toFloat()
                         )
                     )
                 }

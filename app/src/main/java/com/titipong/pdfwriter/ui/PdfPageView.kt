@@ -19,6 +19,7 @@ import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
 import com.titipong.pdfwriter.model.StrokePoint
 import com.titipong.pdfwriter.model.TextNote
+import com.titipong.pdfwriter.model.ImageNote
 import kotlin.math.hypot
 import kotlin.math.max
 
@@ -42,11 +43,14 @@ class PdfPageView(context: Context) : View(context) {
         val toolActive: Boolean get() = true
         /** A tap on an existing text note with the text tool. */
         fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {}
+        /** Image tool: a tap on an existing picture, or on an empty spot (add a picture there). */
+        fun onImageTapped(view: PdfPageView, page: Int, image: ImageNote) {}
+        fun requestImage(page: Int, x: Float, y: Float) {}
         /** The selected text note is being dragged (hide popups), and was moved / resized. */
         fun onNoteDragStart() {}
         /** A tap away from the selected note: unselect it (instead of adding a new note). */
         fun onNoteDeselect() {}
-        fun onNoteChanged(view: PdfPageView, page: Int, before: TextNote, after: TextNote) {}
+        fun onNoteChanged(view: PdfPageView, page: Int, before: Any, after: Any) {}
         /** Settings: smooth pen strokes; straighten free-highlighter strokes. */
         val inkSmoothing: Boolean get() = false
         val highlighterStraighten: Boolean get() = false
@@ -149,7 +153,8 @@ class PdfPageView(context: Context) : View(context) {
         }
 
     /** The text note shown with a dotted frame and corner handles (drag to move / resize). */
-    var editingNote: TextNote? = null
+    /** A TextNote or ImageNote. */
+    var editingNote: Any? = null
         set(value) {
             field = value
             invalidate()
@@ -162,6 +167,8 @@ class PdfPageView(context: Context) : View(context) {
             floatArrayOf(5f * resources.displayMetrics.density, 4f * resources.displayMetrics.density), 0f
         )
     }
+    private val imagePaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val imageDst = RectF()
     private val handleFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val handleStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -376,7 +383,7 @@ class PdfPageView(context: Context) : View(context) {
         }
         selectionRects?.forEach { r -> canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, selectionPaint) }
         editingNote?.let { n ->
-            val f = noteFrame(n)
+            val f = noteFrame(n) ?: return@let
             canvas.drawRect(f.left * s, f.top * s, f.right * s, f.bottom * s, frameDash)
             val hs = 5f * density
             for ((cx, cy) in corners(f)) {
@@ -456,6 +463,13 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun renderAnnotations(canvas: Canvas, a: PageAnnotations, s: Float, filter: ColorFilter?) {
+        // Pictures first, so ink and notes go on top of them.
+        for (im in a.images) {
+            val bmp = ImageCache.get(im.file) ?: continue
+            imageDst.set(im.x * s, im.y * s, (im.x + im.w) * s, (im.y + im.h) * s)
+            imagePaint.colorFilter = filter
+            canvas.drawBitmap(bmp, null, imageDst, imagePaint)
+        }
         for (st in a.strokes) drawStroke(canvas, st, s, filter)
         textPaint.colorFilter = filter
         for (t in a.texts) {
@@ -526,7 +540,7 @@ class PdfPageView(context: Context) : View(context) {
 
         // No tool selected: the pen scrolls the page like a finger (unless the side button is held).
         if (!h.toolActive && !eraserButton && mode == Mode.NONE) return false
-        if (!eraserButton && h.tool == DrawTool.TEXT && noteDrag(e, h)) return true
+        if (!eraserButton && (h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE) && noteDrag(e, h)) return true
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -558,7 +572,9 @@ class PdfPageView(context: Context) : View(context) {
                         appendPoints(e)
                         commitStroke(h)
                     }
-                    Mode.TEXT -> if (toNormalized(e.x, e.y)) textTap(h, pt[0], pt[1])
+                    Mode.TEXT -> if (toNormalized(e.x, e.y)) {
+                        if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
+                    }
                     else -> {}
                 }
                 endGesture()
@@ -572,7 +588,8 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
-        if (h.tool != DrawTool.TEXT || !h.toolActive) return false // let the list scroll
+        val placing = h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE
+        if (!placing || !h.toolActive) return false // let the list scroll
         if (noteDrag(e, h)) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -582,7 +599,7 @@ class PdfPageView(context: Context) : View(context) {
             MotionEvent.ACTION_UP -> {
                 if (hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && toNormalized(e.x, e.y)) {
                     performClick()
-                    textTap(h, pt[0], pt[1])
+                    if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
                 }
             }
         }
@@ -597,10 +614,12 @@ class PdfPageView(context: Context) : View(context) {
     private var dragKind = 0
     private var dragStartX = 0f
     private var dragStartY = 0f
-    private var dragOriginal: TextNote? = null
+    private var dragOriginal: Any? = null
     private var dragMoved = false
 
-    private fun noteFrame(n: TextNote): RectF {
+    private fun noteFrame(item: Any): RectF? {
+        if (item is ImageNote) return RectF(item.x, item.y, item.x + item.w, item.y + item.h)
+        val n = item as? TextNote ?: return null
         val b = textBox(n)
         val pad = 4f * density / pageScale.coerceAtLeast(1f)
         return RectF(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad)
@@ -620,7 +639,7 @@ class PdfPageView(context: Context) : View(context) {
                 if (note == null || !toNormalized(e.x, e.y)) return false
                 val x = pt[0]
                 val y = pt[1]
-                val f = noteFrame(note)
+                val f = noteFrame(note) ?: return false
                 val grab = 18f * density / pageScale.coerceAtLeast(1f)
                 val corner = corners(f).indexOfFirst { (cx, cy) -> hypot(cx - x, cy - y) < grab }
                 dragKind = when {
@@ -647,10 +666,10 @@ class PdfPageView(context: Context) : View(context) {
                     dragMoved = true
                     h.onNoteDragStart()
                 }
-                val updated = if (dragKind == 1) {
-                    TextNote(orig.text, orig.x + dx, orig.y + dy, orig.color, orig.size)
-                } else {
-                    resized(orig, dragKind - 2, pt[0], pt[1])
+                val updated: Any = when {
+                    dragKind == 1 && orig is TextNote -> TextNote(orig.text, orig.x + dx, orig.y + dy, orig.color, orig.size)
+                    dragKind == 1 && orig is ImageNote -> ImageNote(orig.file, orig.x + dx, orig.y + dy, orig.w, orig.h)
+                    else -> resized(orig, dragKind - 2, pt[0], pt[1]) ?: return true
                 }
                 replaceNote(editingNote ?: return true, updated)
                 return true
@@ -665,7 +684,9 @@ class PdfPageView(context: Context) : View(context) {
                     h.onNoteChanged(this, pageIndex, orig, now)
                 } else if (!dragMoved && now != null) {
                     performClick()
-                    h.onTextTapped(this, pageIndex, now) // a tap: show its menu again
+                    // A tap: show its menu again.
+                    if (now is ImageNote) h.onImageTapped(this, pageIndex, now)
+                    else if (now is TextNote) h.onTextTapped(this, pageIndex, now)
                 }
                 return true
             }
@@ -679,26 +700,43 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     /** [orig] scaled so its frame's corner [corner] follows (x, y) while the opposite corner stays. */
-    private fun resized(orig: TextNote, corner: Int, x: Float, y: Float): TextNote {
-        val f = noteFrame(orig)
+    private fun resized(orig: Any, corner: Int, x: Float, y: Float): Any? {
+        val f = noteFrame(orig) ?: return null
         val c = corners(f)
         val (ax, ay) = c[(corner + 2) % 4] // the fixed, opposite corner
         val scale = maxOf(
             kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f),
             kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)
         ).coerceIn(0.2f, 8f)
+        if (orig is ImageNote) {
+            // Pictures keep their shape; the opposite corner stays put.
+            val w = (orig.w * scale).coerceIn(0.02f, 3f)
+            val h = orig.h * (w / orig.w)
+            val left = if (corner == 0 || corner == 3) ax - w else ax
+            val top = if (corner == 0 || corner == 1) ay - h else ay
+            return ImageNote(orig.file, left, top, w, h)
+        }
+        if (orig !is TextNote) return null
         val size = (orig.size * scale).coerceIn(0.006f, 0.4f)
         val trial = TextNote(orig.text, orig.x, orig.y, orig.color, size)
-        val nf = noteFrame(trial)
+        val nf = noteFrame(trial) ?: return null
         val (tx, ty) = corners(nf)[(corner + 2) % 4]
         return TextNote(orig.text, orig.x + (ax - tx), orig.y + (ay - ty), orig.color, size)
     }
 
-    private fun replaceNote(old: TextNote, new: TextNote) {
-        val list = annotations?.texts ?: return
-        val i = list.indexOf(old)
-        if (i < 0) return
-        list[i] = new
+    private fun replaceNote(old: Any, new: Any) {
+        val a = annotations ?: return
+        if (old is TextNote && new is TextNote) {
+            val i = a.texts.indexOf(old)
+            if (i < 0) return
+            a.texts[i] = new
+        } else if (old is ImageNote && new is ImageNote) {
+            val i = a.images.indexOf(old)
+            if (i < 0) return
+            a.images[i] = new
+        } else {
+            return
+        }
         editingNote = new
         inkDirty = true
         invalidate()
@@ -712,6 +750,16 @@ class PdfPageView(context: Context) : View(context) {
             return
         }
         if (hit != null) h.onTextTapped(this, pageIndex, hit) else h.requestText(pageIndex, nx, ny)
+    }
+
+    /** Image tool tap: on a picture -> select it; elsewhere -> pick a picture to place there. */
+    private fun imageTap(h: Host, nx: Float, ny: Float) {
+        val hit = annotations?.images?.lastOrNull { nx >= it.x && nx <= it.x + it.w && ny >= it.y && ny <= it.y + it.h }
+        if (hit == null && editingNote != null) {
+            h.onNoteDeselect()
+            return
+        }
+        if (hit != null) h.onImageTapped(this, pageIndex, hit) else h.requestImage(pageIndex, nx, ny)
     }
 
     private fun textAt(nx: Float, ny: Float): TextNote? {
@@ -803,7 +851,7 @@ class PdfPageView(context: Context) : View(context) {
                 mode = Mode.ERASE
                 eraseAt(e.x, e.y, h)
             }
-            DrawTool.TEXT -> mode = Mode.TEXT
+            DrawTool.TEXT, DrawTool.IMAGE -> mode = Mode.TEXT // a tap (handled on lift)
             DrawTool.PEN, DrawTool.HIGHLIGHTER -> {
                 mode = Mode.INK
                 val hl = tool == DrawTool.HIGHLIGHTER

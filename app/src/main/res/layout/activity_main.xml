@@ -167,6 +167,12 @@
                 android:contentDescription="@string/tool_text"
                 android:src="@drawable/ic_text" />
 
+            <ImageButton
+                android:id="@+id/btnImage"
+                style="@style/ToolButton"
+                android:contentDescription="@string/tool_image"
+                android:src="@drawable/ic_image" />
+
             <View style="@style/ToolDivider" />
 
             <LinearLayout
@@ -199,9 +205,12 @@
                     android:text="@string/erase_pixel" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
-            <View style="@style/ToolDivider" />
+            <View
+                android:id="@+id/sizeDivider"
+                style="@style/ToolDivider" />
 
             <TextView
+                android:id="@+id/tvSizeLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="6dp"
