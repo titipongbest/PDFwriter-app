@@ -105,6 +105,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun widthFor(tenths: Int) = 0.0003f + 0.0012f * (tenths / 10f)
 
     override val tool: DrawTool get() = currentTool
+    /** Tapping the selected tool again puts it away (no tool: the S Pen scrolls). */
+    private var toolOn = true
+    override val toolActive: Boolean get() = toolOn
+    private var tappedNote: Pair<Int, TextNote>? = null
     override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
     override val strokeWidth: Float get() = widthFor(sizeTenths)
     override val eraserWidth: Float get() = widthFor(toolSettings.getValue(DrawTool.ERASER).sizeTenths)
@@ -406,6 +410,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             e.putInt(k + "size", ts.sizeTenths)
         }
         e.putString(PREF_TOOL, currentTool.name)
+        e.putBoolean(PREF_TOOL_ON, toolOn)
         e.apply()
     }
 
@@ -414,7 +419,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.HIGHLIGHTER] = binding.btnHighlight
         toolButtons[DrawTool.ERASER] = binding.btnEraser
         toolButtons[DrawTool.TEXT] = binding.btnText
-        toolButtons.forEach { (t, v) -> v.setOnClickListener { selectTool(t) } }
+        toolButtons.forEach { (t, v) ->
+            v.setOnClickListener {
+                if (t == currentTool && toolOn) {
+                    toolOn = false
+                    toolButtons.values.forEach { it.isSelected = false }
+                    saveToolPrefs()
+                } else {
+                    selectTool(t)
+                }
+            }
+        }
         binding.btnUndo.setOnClickListener { undoLast() }
         binding.btnSearchClose.setOnClickListener { closeSearch() }
         binding.btnSearchNext.setOnClickListener { stepHit(+1) }
@@ -480,7 +495,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.tvSize.setOnClickListener { promptSize() }
         binding.btnViewUndo.setOnClickListener { undoLast() }
 
+        val wasOn = prefs.getBoolean(PREF_TOOL_ON, true)
         selectTool(currentTool)
+        if (!wasOn) {
+            toolOn = false
+            toolButtons.values.forEach { it.isSelected = false }
+        }
         setupModeToggle()
     }
 
@@ -530,6 +550,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     /** Switches tool and shows that tool's own colors and size. */
     private fun selectTool(t: DrawTool) {
         currentTool = t
+        toolOn = true
         toolButtons.forEach { (key, v) -> v.isSelected = key == t }
         val hasColors = palette.isNotEmpty()
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
@@ -1891,6 +1912,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.selectionBar.visibility = View.VISIBLE
     }
 
+    override fun onTextTapped(page: Int, note: TextNote) {
+        clearSelection()
+        tappedNote = page to note
+        binding.btnSelCopy.visibility = View.GONE
+        binding.btnSelHighlight.visibility = View.GONE
+        binding.btnSelUnderline.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.GONE
+        binding.btnHlDelete.visibility = View.VISIBLE
+        binding.selectionBar.visibility = View.VISIBLE
+    }
+
     private fun selectionRange(): Pair<Int, Int> =
         if (selFocus >= selAnchorStart) selAnchorStart to maxOf(selAnchorEnd, selFocus)
         else selFocus to selAnchorEnd
@@ -1907,6 +1939,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         selView = null
         selPage = -1
         tappedHighlight = null
+        tappedNote = null
         binding.selectionBar.visibility = View.GONE
     }
 
@@ -1950,6 +1983,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun deleteTappedHighlight() {
+        tappedNote?.let { (page, note) ->
+            pages[page]?.texts?.remove(note)
+            clearSelection()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+            return
+        }
         val (page, hl) = tappedHighlight ?: return
         pages[page]?.highlights?.remove(hl)
         clearSelection()
@@ -2400,6 +2440,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val SAMSUNG_PEN_MOVE = 213
 
         private const val PREF_TOOL = "current_tool"
+        private const val PREF_TOOL_ON = "tool_on"
         private const val PREF_TABS = "open_tabs"
         private const val MAX_TABS = 12
 

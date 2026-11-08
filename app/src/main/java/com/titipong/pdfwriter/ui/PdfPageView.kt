@@ -38,6 +38,10 @@ class PdfPageView(context: Context) : View(context) {
         val tool: DrawTool
         val color: Int
         val strokeWidth: Float
+        /** false = no tool selected: the S Pen scrolls like a finger (side button still erases). */
+        val toolActive: Boolean get() = true
+        /** A tap on an existing text note with the text tool. */
+        fun onTextTapped(page: Int, note: TextNote) {}
         /** Eraser size (its own setting; also used for the S Pen side button). */
         val eraserWidth: Float get() = strokeWidth
         fun annotationsFor(page: Int): PageAnnotations
@@ -443,6 +447,9 @@ class PdfPageView(context: Context) : View(context) {
             toolType == MotionEvent.TOOL_TYPE_ERASER ||
             (e.buttonState and (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0
 
+        // No tool selected: the pen scrolls the page like a finger (unless the side button is held).
+        if (!h.toolActive && !eraserButton && mode == Mode.NONE) return false
+
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
@@ -473,7 +480,7 @@ class PdfPageView(context: Context) : View(context) {
                         appendPoints(e)
                         commitStroke(h)
                     }
-                    Mode.TEXT -> if (toNormalized(e.x, e.y)) h.requestText(pageIndex, pt[0], pt[1])
+                    Mode.TEXT -> if (toNormalized(e.x, e.y)) textTap(h, pt[0], pt[1])
                     else -> {}
                 }
                 endGesture()
@@ -487,7 +494,7 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
-        if (h.tool != DrawTool.TEXT) return false // let the list scroll
+        if (h.tool != DrawTool.TEXT || !h.toolActive) return false // let the list scroll
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 fingerDownX = e.x
@@ -496,7 +503,7 @@ class PdfPageView(context: Context) : View(context) {
             MotionEvent.ACTION_UP -> {
                 if (hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && toNormalized(e.x, e.y)) {
                     performClick()
-                    h.requestText(pageIndex, pt[0], pt[1])
+                    textTap(h, pt[0], pt[1])
                 }
             }
         }
@@ -504,6 +511,23 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     override fun performClick(): Boolean = super.performClick()
+
+    /** Text tool tap: on an existing note -> offer to delete it; elsewhere -> add a note. */
+    private fun textTap(h: Host, nx: Float, ny: Float) {
+        val hit = textAt(nx, ny)
+        if (hit != null) h.onTextTapped(pageIndex, hit) else h.requestText(pageIndex, nx, ny)
+    }
+
+    private fun textAt(nx: Float, ny: Float): TextNote? {
+        val s = pageScale
+        if (s <= 0f) return null
+        val pad = 6f * density / s
+        return annotations?.texts?.lastOrNull { t ->
+            textPaint.textSize = t.size * s
+            val tw = textPaint.measureText(t.text) / s
+            nx >= t.x - pad && nx <= t.x + tw + pad && ny >= t.y - t.size - pad && ny <= t.y + t.size * 0.3f + pad
+        }
+    }
 
     // ---------------------------------------------------------------- view mode: select text
 
@@ -639,15 +663,9 @@ class PdfPageView(context: Context) : View(context) {
             val reach = rn + st.width / 2f
             st.points.any { p -> hypot(p.x - x, p.y - y) < reach }
         }
-        val textsRemoved = a.texts.removeAll { t ->
-            textPaint.textSize = t.size * s
-            val tw = textPaint.measureText(t.text) / s
-            x >= t.x - rn && x <= t.x + tw + rn && y >= t.y - t.size - rn && y <= t.y + rn
-        }
-        val highlightsRemoved = a.highlights.removeAll { hl ->
-            hl.rects.any { r -> x >= r.left - rn && x <= r.right + rn && y >= r.top - rn && y <= r.bottom + rn }
-        }
-        if (strokesRemoved || textsRemoved || highlightsRemoved) {
+        // The eraser only removes pen / highlighter ink. Text notes and text highlights / underlines
+        // are deleted by tapping them (text tool / view mode).
+        if (strokesRemoved) {
             inkDirty = true
             h.onItemsErased(pageIndex)
         }
