@@ -235,7 +235,8 @@ class PdfDocumentRenderer private constructor(
      * A sharp-enough image already made (memory or disk), without rendering: shown first while a
      * sharper one (e.g. for zoom) is rendered. Null if there is none at [minWidth].
      */
-    suspend fun quick(index: Int, minWidth: Int): Bitmap? = withContext(lanes.urgent + PageKey(index)) {
+    // Runs on its own (I/O) threads, never waiting behind a page being rendered.
+    suspend fun quick(index: Int, minWidth: Int): Bitmap? = withContext(Dispatchers.IO) {
         if (closed || index !in 0 until pageCount) return@withContext null
         val w = minWidth.coerceIn(300, MAX_WIDTH)
         val cached = cache.get(index)
@@ -246,7 +247,20 @@ class PdfDocumentRenderer private constructor(
         }
     }
 
-    suspend fun render(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? =
+    suspend fun render(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? {
+        // A saved image is read right away on I/O threads, without queueing for the renderer.
+        if (closed || index !in 0 until pageCount) return null
+        val want = targetWidth.coerceIn(300, MAX_WIDTH)
+        cache.get(index)?.let { if (it.width >= want * FIT) return it }
+        withContext(Dispatchers.IO) { loadFromDisk(index, want) }?.let {
+            cache.put(index, it)
+            keepPreview(index, it)
+            return it
+        }
+        return renderQueued(index, targetWidth, urgent)
+    }
+
+    private suspend fun renderQueued(index: Int, targetWidth: Int, urgent: Boolean): Bitmap? =
         withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
         if (closed || index !in 0 until pageCount) return@withContext null
         val w = targetWidth.coerceIn(300, MAX_WIDTH)
@@ -410,7 +424,7 @@ class PdfDocumentRenderer private constructor(
 
     companion object {
         const val MAX_WIDTH = 2800
-        private const val PREVIEW_WIDTH = 480
+        private const val PREVIEW_WIDTH = 640
         /** An image this close to the wanted width is used as is (no re-render for a few pixels). */
         private const val FIT = 0.9f
         private const val DISK_LIMIT = 400L * 1024 * 1024

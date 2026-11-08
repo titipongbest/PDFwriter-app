@@ -178,6 +178,8 @@ class PageAdapter(
                         }
                     }
                 }
+                // Not saved yet: render it, unless the page is only flying past (fast scrolling).
+                kotlinx.coroutines.delay(60)
                 // Retry failed renders (e.g. memory pressure), at a lower resolution after the first tries.
                 var bmp: android.graphics.Bitmap? = null
                 var attempt = 0
