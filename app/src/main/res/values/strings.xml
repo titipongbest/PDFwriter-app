@@ -1,4 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PDFWriter</string>
+    <string name="open_pdf">เปิดไฟล์ PDF</string>
+    <string name="open">เปิด</string>
+    <string name="open_failed">เปิดไฟล์นี้ไม่ได้ อาจมีรหัสผ่านหรือไฟล์เสีย</string>
+    <string name="empty_title">เปิด PDF เพื่อเริ่มเขียน</string>
+    <string name="empty_body">ใช้นิ้วเลื่อนหน้า ใช้ S Pen เขียน\nกดปุ่มข้างปากกาค้างไว้เพื่อลบ</string>
+    <string name="tool_pen">ปากกา</string>
+    <string name="tool_highlight">ไฮไลต์</string>
+    <string name="tool_eraser">ยางลบ</string>
+    <string name="tool_text">ข้อความ</string>
+    <string name="color">สี</string>
+    <string name="size">ขนาดเส้น</string>
+    <string name="undo">เลิกทำ</string>
+    <string name="nothing_to_undo">ไม่มีอะไรให้เลิกทำ</string>
+    <string name="add_text">เพิ่มข้อความ</string>
+    <string name="text_hint">พิมพ์ข้อความ</string>
+    <string name="ok">ตกลง</string>
+    <string name="cancel">ยกเลิก</string>
+    <string name="delete">ลบ</string>
+    <string name="clear_page">ลบรอยเขียนในหน้านี้</string>
+    <string name="clear_page_confirm">ลบรอยเขียนทั้งหมดในหน้า %1$d ใช่ไหม</string>
+    <string name="page_of">หน้า %1$d / %2$d</string>
+    <string name="saving">กำลังบันทึก…</string>
+    <string name="saved">✓ บันทึกแล้ว</string>
+    <string name="save_failed">บันทึกไม่สำเร็จ</string>
 </resources>

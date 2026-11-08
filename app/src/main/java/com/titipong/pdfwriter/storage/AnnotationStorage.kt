@@ -1,122 +1,134 @@
 package com.titipong.pdfwriter.storage
 
 import android.content.Context
+import com.titipong.pdfwriter.model.InkStroke
 import com.titipong.pdfwriter.model.PageAnnotations
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.titipong.pdfwriter.model.StrokePoint
+import com.titipong.pdfwriter.model.TextNote
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+/** Saves annotations as JSON in app-private storage, one file per PDF (name + size). */
 object AnnotationStorage {
 
-    private fun storageDir(context: Context) =
-        File(context.filesDir, "annotations").also { it.mkdirs() }
+    private val lastWritten = HashMap<String, Long>()
 
-    private fun fileFor(context: Context, pdfName: String): File {
-        val safe = pdfName.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        return File(storageDir(context), "$safe.json")
+    fun keyFor(name: String, size: Long): String = "${name}_$size"
+
+    private fun fileFor(context: Context, key: String): File {
+        val dir = File(context.filesDir, "annotations")
+        dir.mkdirs()
+        val safe = key.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return File(dir, "$safe.json")
     }
 
-    suspend fun save(
-        context: Context,
-        pdfName: String,
-        annotations: Map<Int, PageAnnotations>
-    ) = withContext(Dispatchers.IO) {
-        val root = JSONObject()
-        val pages = JSONObject()
-        annotations.forEach { (page, pa) ->
-            val pageObj = JSONObject()
-            // strokes
-            val strArr = JSONArray()
-            pa.strokes.forEach { s ->
-                val obj = JSONObject()
-                obj.put("color", s.color)
-                obj.put("width", s.strokeWidth)
-                obj.put("tool", s.tool)
-                obj.put("page", s.pageIndex)
+    private fun r(v: Float, scale: Double): Double = Math.round(v * scale) / scale
+
+    fun toJson(pages: Map<Int, PageAnnotations>): String {
+        val pagesJson = JSONObject()
+        for ((index, page) in pages) {
+            if (page.isEmpty()) continue
+            val strokes = JSONArray()
+            for (s in page.strokes) {
                 val pts = JSONArray()
-                s.points.forEach { p ->
-                    val pt = JSONObject()
-                    pt.put("x", p.x); pt.put("y", p.y); pt.put("pr", p.pressure)
-                    pts.put(pt)
+                for (p in s.points) {
+                    pts.put(r(p.x, 100000.0))
+                    pts.put(r(p.y, 100000.0))
+                    pts.put(r(p.pressure, 1000.0))
                 }
-                obj.put("pts", pts)
-                strArr.put(obj)
+                val so = JSONObject()
+                so.put("c", s.color)
+                so.put("w", s.width.toDouble())
+                so.put("h", s.highlighter)
+                so.put("p", pts)
+                strokes.put(so)
             }
-            pageObj.put("strokes", strArr)
-            // texts
-            val txtArr = JSONArray()
-            pa.texts.forEach { t ->
-                val obj = JSONObject()
-                obj.put("text", t.text)
-                obj.put("x", t.x); obj.put("y", t.y)
-                obj.put("color", t.color)
-                obj.put("size", t.textSize)
-                obj.put("page", t.pageIndex)
-                txtArr.put(obj)
+            val texts = JSONArray()
+            for (t in page.texts) {
+                val to = JSONObject()
+                to.put("t", t.text)
+                to.put("x", t.x.toDouble())
+                to.put("y", t.y.toDouble())
+                to.put("c", t.color)
+                to.put("z", t.size.toDouble())
+                texts.put(to)
             }
-            pageObj.put("texts", txtArr)
-            pages.put(page.toString(), pageObj)
+            val po = JSONObject()
+            po.put("s", strokes)
+            po.put("t", texts)
+            pagesJson.put(index.toString(), po)
         }
-        root.put("pages", pages)
-        fileFor(context, pdfName).writeText(root.toString())
+        val root = JSONObject()
+        root.put("v", 1)
+        root.put("pages", pagesJson)
+        return root.toString()
     }
 
-    suspend fun load(
-        context: Context,
-        pdfName: String
-    ): Map<Int, PageAnnotations> = withContext(Dispatchers.IO) {
-        val file = fileFor(context, pdfName)
-        if (!file.exists()) return@withContext emptyMap()
-        try {
-            val root = JSONObject(file.readText())
-            val pages = root.getJSONObject("pages")
-            val result = mutableMapOf<Int, PageAnnotations>()
-            pages.keys().forEach { key ->
-                val page = key.toInt()
-                val pageObj = pages.getJSONObject(key)
-                val pa = PageAnnotations()
-                // strokes
-                val strArr = pageObj.getJSONArray("strokes")
-                for (i in 0 until strArr.length()) {
-                    val obj = strArr.getJSONObject(i)
-                    val pts = mutableListOf<com.titipong.pdfwriter.model.StrokePoint>()
-                    val ptsArr = obj.getJSONArray("pts")
-                    for (j in 0 until ptsArr.length()) {
-                        val pt = ptsArr.getJSONObject(j)
-                        pts.add(com.titipong.pdfwriter.model.StrokePoint(
-                            pt.getDouble("x").toFloat(),
-                            pt.getDouble("y").toFloat(),
-                            pt.optDouble("pr", 0.5).toFloat()
-                        ))
-                    }
-                    pa.strokes.add(com.titipong.pdfwriter.model.SerializableStroke(
-                        points = pts,
-                        color = obj.getInt("color"),
-                        strokeWidth = obj.getDouble("width").toFloat(),
-                        tool = obj.getString("tool"),
-                        pageIndex = obj.getInt("page")
-                    ))
-                }
-                // texts
-                val txtArr = pageObj.getJSONArray("texts")
-                for (i in 0 until txtArr.length()) {
-                    val obj = txtArr.getJSONObject(i)
-                    pa.texts.add(com.titipong.pdfwriter.model.TextAnnotation(
-                        text = obj.getString("text"),
-                        x = obj.getDouble("x").toFloat(),
-                        y = obj.getDouble("y").toFloat(),
-                        color = obj.getInt("color"),
-                        textSize = obj.getDouble("size").toFloat(),
-                        pageIndex = obj.getInt("page")
-                    ))
-                }
-                result[page] = pa
-            }
-            result
-        } catch (e: Exception) {
-            emptyMap()
+    /** Atomic write. Snapshots older than the last one written for this key are skipped. */
+    @Synchronized
+    fun save(context: Context, key: String, json: String, seq: Long) {
+        val last = lastWritten[key]
+        if (last != null && seq <= last) return
+        val target = fileFor(context, key)
+        val tmp = File(target.path + ".tmp")
+        tmp.writeText(json)
+        if (!tmp.renameTo(target)) {
+            target.delete()
+            tmp.renameTo(target)
         }
+        lastWritten[key] = seq
+    }
+
+    fun load(context: Context, key: String): MutableMap<Int, PageAnnotations> {
+        val result = mutableMapOf<Int, PageAnnotations>()
+        val file = fileFor(context, key)
+        if (!file.exists()) return result
+        try {
+            val pagesJson = JSONObject(file.readText()).getJSONObject("pages")
+            val keys = pagesJson.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val po = pagesJson.getJSONObject(k)
+                val page = PageAnnotations()
+                val strokes = po.optJSONArray("s") ?: JSONArray()
+                for (i in 0 until strokes.length()) {
+                    val so = strokes.getJSONObject(i)
+                    val arr = so.getJSONArray("p")
+                    val pts = ArrayList<StrokePoint>(arr.length() / 3)
+                    var j = 0
+                    while (j + 2 < arr.length()) {
+                        pts.add(
+                            StrokePoint(
+                                arr.getDouble(j).toFloat(),
+                                arr.getDouble(j + 1).toFloat(),
+                                arr.getDouble(j + 2).toFloat()
+                            )
+                        )
+                        j += 3
+                    }
+                    page.strokes.add(
+                        InkStroke(pts, so.getInt("c"), so.getDouble("w").toFloat(), so.optBoolean("h"))
+                    )
+                }
+                val texts = po.optJSONArray("t") ?: JSONArray()
+                for (i in 0 until texts.length()) {
+                    val to = texts.getJSONObject(i)
+                    page.texts.add(
+                        TextNote(
+                            to.getString("t"),
+                            to.getDouble("x").toFloat(),
+                            to.getDouble("y").toFloat(),
+                            to.getInt("c"),
+                            to.getDouble("z").toFloat()
+                        )
+                    )
+                }
+                result[k.toInt()] = page
+            }
+        } catch (e: Exception) {
+            // Corrupt file: start fresh rather than crash.
+        }
+        return result
     }
 }

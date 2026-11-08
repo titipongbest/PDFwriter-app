@@ -1,23 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-
-    <item
-        android:id="@+id/action_text"
-        android:title="เพิ่มข้อความ"
-        android:icon="@drawable/ic_text"
-        app:showAsAction="ifRoom"/>
-    <item
-        android:id="@+id/action_undo"
-        android:title="เลิกทำ"
-        android:icon="@drawable/ic_undo"
-        app:showAsAction="ifRoom"/>
-    <item
-        android:id="@+id/action_clear"
-        android:title="ลบหน้านี้"
-        app:showAsAction="never"/>
     <item
         android:id="@+id/action_open"
-        android:title="เปิด PDF"
-        app:showAsAction="never"/>
+        android:title="@string/open"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_clear"
+        android:title="@string/clear_page"
+        app:showAsAction="never" />
 </menu>
