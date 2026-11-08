@@ -1,91 +1,152 @@
 package com.titipong.pdfwriter.ui
 
-import android.view.View
+import android.graphics.RectF
 import android.view.ViewGroup
+import androidx.core.view.doOnLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.titipong.pdfwriter.pdf.PdfDocumentRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
+enum class PageLayout { SINGLE, DOUBLE, COVER }
+
+/** Display settings for the reader list. */
+class ViewConfig(
+    val layout: PageLayout,
+    val vertical: Boolean,
+    val rotation: Int,
+    val crops: Map<Int, RectF>?,
+    val look: PdfPageView.Look
+)
+
+/** Reader list: each item is a spread of one or two pages. */
 class PageAdapter(
     private val doc: PdfDocumentRenderer,
     private val host: PdfPageView.Host,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val config: ViewConfig
 ) : RecyclerView.Adapter<PageAdapter.Holder>() {
 
-    class Holder(val page: PdfPageView) : RecyclerView.ViewHolder(page) {
-        var job: Job? = null
+    class Holder(val spread: SpreadView) : RecyclerView.ViewHolder(spread) {
+        val jobs = arrayOfNulls<Job>(2)
     }
 
-    /** Pages render at (view width x renderScale) so zoomed pages stay sharp. */
+    /** Pages shown by each item. */
+    private val spreads: List<IntArray> = buildSpreads(doc.pageCount, config.layout)
+    private val positionOfPage = IntArray(doc.pageCount).also { arr ->
+        spreads.forEachIndexed { pos, s -> s.forEach { arr[it] = pos } }
+    }
+
+    /** Pages render at (page width on screen x renderScale) so zoomed pages stay sharp. */
     var renderScale = 1f
 
-    override fun getItemCount(): Int = doc.pageCount
+    fun positionOf(page: Int): Int = if (page in positionOfPage.indices) positionOfPage[page] else 0
+    fun firstPageAt(position: Int): Int = spreads.getOrNull(position)?.firstOrNull() ?: -1
+    fun notifyPage(page: Int, payload: Any) {
+        if (page in positionOfPage.indices) notifyItemChanged(positionOfPage[page], payload)
+    }
+
+    override fun getItemCount(): Int = spreads.size
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-        val view = PdfPageView(parent.context)
+        val view = SpreadView(parent.context)
         val gap = (12 * parent.resources.displayMetrics.density).toInt()
-        view.layoutParams = RecyclerView.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = gap }
-        view.host = host
+        view.layoutParams = if (config.vertical) {
+            RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = gap }
+        } else {
+            RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        view.fitViewport = !config.vertical
+        view.pages.forEach { it.host = host }
         return Holder(view)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
+        val s = spreads[position]
         if (payloads.contains(RERENDER_PAYLOAD)) {
-            holder.page.invalidateInk()
-            render(holder, position)
+            s.forEachIndexed { i, page ->
+                holder.spread.pages[i].invalidateInk()
+                render(holder, i, page)
+            }
             return
         }
         if (payloads.contains(INK_PAYLOAD)) {
-            holder.page.bookmarked = host.isBookmarked(position)
-            holder.page.invalidateInk()
+            s.forEachIndexed { i, page ->
+                holder.spread.pages[i].bookmarked = host.isBookmarked(page)
+                holder.spread.pages[i].invalidateInk()
+            }
             return
         }
         onBindViewHolder(holder, position)
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
-        val v = holder.page
-        v.pageIndex = position
-        v.pageAspect = doc.aspects[position]
-        v.annotations = host.annotationsFor(position)
-        v.bookmarked = host.isBookmarked(position)
-        v.bitmap = null
-        render(holder, position)
+        val s = spreads[position]
+        holder.spread.count = s.size
+        s.forEachIndexed { i, page ->
+            val v = holder.spread.pages[i]
+            v.pageIndex = page
+            v.pageAspect = doc.aspects[page]
+            v.viewRotation = config.rotation
+            v.crop = config.crops?.get(page)
+            v.look = config.look
+            v.annotations = host.annotationsFor(page)
+            v.bookmarked = host.isBookmarked(page)
+            v.bitmap = null
+            render(holder, i, page)
+        }
     }
 
-    /** Keeps the current bitmap on screen until the new one is ready. */
-    private fun render(holder: Holder, position: Int) {
-        val v = holder.page
-        holder.job?.cancel()
-        holder.job = scope.launch {
-            val parentWidth = (v.parent as? View)?.width ?: 0
-            val base = when {
-                v.width > 0 -> v.width
-                parentWidth > 0 -> parentWidth
-                else -> v.resources.displayMetrics.widthPixels
+    /** Waits for layout (so the on-screen size is known), keeps the old bitmap until the new one is ready. */
+    private fun render(holder: Holder, slot: Int, page: Int) {
+        val v = holder.spread.pages[slot]
+        holder.jobs[slot]?.cancel()
+        v.doOnLayout {
+            if (v.pageIndex != page) return@doOnLayout
+            holder.jobs[slot]?.cancel()
+            holder.jobs[slot] = scope.launch {
+                val target = (v.renderWidth().coerceAtLeast(v.width) * renderScale).toInt()
+                val bmp = try {
+                    doc.render(page, target)
+                } catch (e: Exception) {
+                    null
+                }
+                if (bmp != null && v.pageIndex == page) v.bitmap = bmp
             }
-            val bmp = try {
-                doc.render(position, (base * renderScale).toInt())
-            } catch (e: Exception) {
-                null
-            }
-            if (bmp != null && v.pageIndex == position) v.bitmap = bmp
         }
     }
 
     override fun onViewRecycled(holder: Holder) {
-        holder.job?.cancel()
-        holder.job = null
-        holder.page.release()
+        holder.jobs.forEachIndexed { i, job ->
+            job?.cancel()
+            holder.jobs[i] = null
+        }
+        holder.spread.pages.forEach { it.release() }
     }
 
     companion object {
         const val INK_PAYLOAD = "ink"
         const val RERENDER_PAYLOAD = "rerender"
+
+        fun buildSpreads(count: Int, layout: PageLayout): List<IntArray> {
+            val out = ArrayList<IntArray>()
+            var i = 0
+            if (layout == PageLayout.COVER && count > 0) {
+                out.add(intArrayOf(0))
+                i = 1
+            }
+            while (i < count) {
+                if (layout != PageLayout.SINGLE && i + 1 < count) {
+                    out.add(intArrayOf(i, i + 1))
+                    i += 2
+                } else {
+                    out.add(intArrayOf(i))
+                    i += 1
+                }
+            }
+            return out
+        }
     }
 }

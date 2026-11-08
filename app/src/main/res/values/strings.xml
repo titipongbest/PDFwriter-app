@@ -75,4 +75,28 @@
     <string name="bookmarks_empty">ยังไม่มีบุ๊กมาร์ก
 กดปุ่มริบบิ้นบนแถบเครื่องมือเพื่อปักหน้าที่กำลังดู</string>
     <string name="page_short">หน้า %1$d</string>
+    <string name="view_mode">โหมดการดู</string>
+    <string name="vm_viewing_mode">โหมดการดู</string>
+    <string name="vm_single">หน้าเดียว</string>
+    <string name="vm_double">สองหน้า</string>
+    <string name="vm_reading">โหมดอ่าน</string>
+    <string name="vm_cover">หน้าปก</string>
+    <string name="vm_vertical">เลื่อนแนวตั้ง</string>
+    <string name="vm_color_mode">โหมดสี</string>
+    <string name="vm_actions">การทำงาน</string>
+    <string name="vm_rotate">หมุนตามเข็มนาฬิกา</string>
+    <string name="vm_rotation_value">%1$d°</string>
+    <string name="vm_crop">ครอปหน้า (ตัดขอบขาว)</string>
+    <string name="vm_display_only">การหมุนและครอปมีผลแค่การแสดงผล ไม่แก้ไขไฟล์ PDF</string>
+    <string name="vm_custom_colors">สีกำหนดเอง</string>
+    <string name="vm_custom_bg">สีพื้นหลัง</string>
+    <string name="vm_custom_fg">สีตัวอักษร</string>
+    <string name="crop_progress">กำลังหาขอบหน้า… %1$d/%2$d</string>
+    <string name="reading_title">โหมดอ่าน</string>
+    <string name="reading_smaller">A−</string>
+    <string name="reading_bigger">A+</string>
+    <string name="reading_exit">กลับไปหน้าเอกสาร</string>
+    <string name="reading_loading">กำลังดึงข้อความ…</string>
+    <string name="reading_no_text">(หน้านี้ไม่มีข้อความที่ดึงได้ เช่น เป็นภาพสแกน)</string>
+    <string name="reading_failed">ดึงข้อความจากไฟล์นี้ไม่ได้</string>
 </resources>

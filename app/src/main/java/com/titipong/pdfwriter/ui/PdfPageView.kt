@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -21,9 +23,13 @@ import kotlin.math.max
 
 /**
  * One PDF page plus its ink layer.
- *  - Finger: not consumed, so the RecyclerView scrolls (except in TEXT mode, where a tap places text).
+ *  - Finger: not consumed, so the list scrolls (except in TEXT mode, where a tap places text).
  *  - S Pen / stylus: draws.
  *  - S Pen side button held (or the stylus eraser end): erases.
+ *
+ * Ink is stored in page-normalized coordinates (x across the page width = 0..1), independent of
+ * how the page is shown. Display options (rotation, cropped margins) only change [toView], the
+ * matrix from "page pixels" to view pixels, and touches are mapped back through its inverse.
  */
 class PdfPageView(context: Context) : View(context) {
 
@@ -38,17 +44,50 @@ class PdfPageView(context: Context) : View(context) {
         fun isBookmarked(page: Int): Boolean
     }
 
+    /** How the page looks: paper color, and filters for the page image and the ink. */
+    class Look(val paper: Int, val pageFilter: ColorFilter?, val inkFilter: ColorFilter?) {
+        companion object {
+            val DEFAULT = Look(Color.WHITE, null, null)
+        }
+    }
+
     private enum class Mode { NONE, INK, ERASE, TEXT }
 
     var host: Host? = null
     var pageIndex = -1
 
+    /** height / width of the page as the PDF shows it (before view rotation / crop). */
     var pageAspect = 1.4142f
         set(value) {
             if (field != value) {
                 field = value
-                requestLayout()
+                geometryChanged()
             }
+        }
+
+    /** Extra view rotation, clockwise: 0, 90, 180, 270. Display only. */
+    var viewRotation = 0
+        set(value) {
+            val v = ((value % 360) + 360) % 360
+            if (field != v) {
+                field = v
+                geometryChanged()
+            }
+        }
+
+    /** Visible part of the page in normalized coordinates (null = whole page). Display only. */
+    var crop: RectF? = null
+        set(value) {
+            if (field != value) {
+                field = value
+                geometryChanged()
+            }
+        }
+
+    var look: Look = Look.DEFAULT
+        set(value) {
+            field = value
+            invalidate()
         }
 
     var bitmap: Bitmap? = null
@@ -77,6 +116,7 @@ class PdfPageView(context: Context) : View(context) {
     private val minEraserPx = 10f * density
 
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val cachePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeJoin = Paint.Join.ROUND
@@ -92,6 +132,16 @@ class PdfPageView(context: Context) : View(context) {
     private val ribbonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EF4444") }
     private val ribbonPath = Path()
 
+    // Page pixels -> view pixels, and back.
+    private val toView = Matrix()
+    private val toPage = Matrix()
+    private var matrixDirty = true
+    private val pt = FloatArray(2)
+
+    /** View pixels per normalized unit (= width of the whole page in view pixels). */
+    var pageScale = 0f
+        private set
+
     private var inkCache: Bitmap? = null
     private var inkDirty = true
 
@@ -102,6 +152,22 @@ class PdfPageView(context: Context) : View(context) {
     private var eraserRadius = 0f
     private var fingerDownX = 0f
     private var fingerDownY = 0f
+
+    private val cropLeft get() = crop?.left ?: 0f
+    private val cropTop get() = crop?.top ?: 0f
+    private val cropWidth get() = crop?.width()?.takeIf { it > 0f } ?: 1f
+    private val cropHeight get() = crop?.height()?.takeIf { it > 0f } ?: pageAspect
+
+    /** height / width of what this view shows (after crop and rotation). */
+    val displayAspect: Float
+        get() = if (viewRotation % 180 == 0) cropHeight / cropWidth else cropWidth / cropHeight
+
+    private fun geometryChanged() {
+        matrixDirty = true
+        inkDirty = true
+        requestLayout()
+        invalidate()
+    }
 
     fun invalidateInk() {
         inkDirty = true
@@ -119,33 +185,89 @@ class PdfPageView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(w, (w * pageAspect).toInt().coerceAtLeast(1))
+        if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.EXACTLY) {
+            setMeasuredDimension(w, MeasureSpec.getSize(heightMeasureSpec))
+        } else {
+            setMeasuredDimension(w, (w * displayAspect).toInt().coerceAtLeast(1))
+        }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        matrixDirty = true
+        inkDirty = true
+    }
+
+    private fun ensureMatrix() {
+        if (!matrixDirty) return
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val along = if (viewRotation % 180 == 0) w else h
+        pageScale = if (along > 0f) along / cropWidth else 0f
+        toView.reset()
+        toView.setTranslate(-cropLeft * pageScale, -cropTop * pageScale)
+        when (viewRotation) {
+            90 -> { toView.postRotate(90f); toView.postTranslate(w, 0f) }
+            180 -> { toView.postRotate(180f); toView.postTranslate(w, h) }
+            270 -> { toView.postRotate(270f); toView.postTranslate(0f, h) }
+        }
+        toView.invert(toPage)
+        matrixDirty = false
+    }
+
+    /** Full page width in view pixels: the size the page bitmap should be rendered at. */
+    fun renderWidth(): Int {
+        ensureMatrix()
+        return pageScale.toInt()
+    }
+
+    private fun zoomScale(): Float {
+        var p = parent
+        repeat(3) {
+            if (p is ZoomRecyclerView) return (p as ZoomRecyclerView).scale
+            p = p?.parent
+        }
+        return 1f
     }
 
     // ---------------------------------------------------------------- drawing
 
     override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat()
-        canvas.drawColor(Color.WHITE)
+        ensureMatrix()
+        val s = pageScale
+        val lk = look
+        canvas.drawColor(lk.paper)
+        canvas.save()
+        canvas.concat(toView)
         val bmp = bitmap
         if (bmp != null && !bmp.isRecycled) {
-            dst.set(0f, 0f, w, height.toFloat())
+            dst.set(0f, 0f, s, pageAspect * s)
+            bitmapPaint.colorFilter = lk.pageFilter
             canvas.drawBitmap(bmp, null, dst, bitmapPaint)
         }
+        canvas.restore()
+
         val a = annotations
         if (a != null && !a.isEmpty()) {
             // Zoomed in: draw ink as vectors so it stays sharp. At 1x a bitmap cache keeps it fast.
-            val zoomed = ((parent as? ZoomRecyclerView)?.scale ?: 1f) > 1.01f
-            val cache = if (zoomed) {
-                null
+            val cache = if (zoomScale() > 1.01f) null else ensureInkCache(a)
+            if (cache != null) {
+                cachePaint.colorFilter = lk.inkFilter
+                canvas.drawBitmap(cache, 0f, 0f, cachePaint)
             } else {
-                ensureInkCache(a)
-                inkCache
+                canvas.save()
+                canvas.concat(toView)
+                renderAnnotations(canvas, a, s, lk.inkFilter)
+                canvas.restore()
             }
-            if (cache != null) canvas.drawBitmap(cache, 0f, 0f, null) else renderAnnotations(canvas, a, w)
         }
-        active?.let { drawStroke(canvas, it, w) }
-        if (bookmarked) drawRibbon(canvas, w)
+        active?.let {
+            canvas.save()
+            canvas.concat(toView)
+            drawStroke(canvas, it, s, lk.inkFilter)
+            canvas.restore()
+        }
+        if (bookmarked) drawRibbon(canvas, width.toFloat())
         if (mode == Mode.ERASE) canvas.drawCircle(eraserX, eraserY, eraserRadius, eraserPaint)
     }
 
@@ -164,8 +286,9 @@ class PdfPageView(context: Context) : View(context) {
         canvas.drawPath(ribbonPath, ribbonPaint)
     }
 
-    private fun ensureInkCache(a: PageAnnotations) {
-        if (width <= 0 || height <= 0) return
+    /** Ink pre-rendered in view pixels (true colors; the ink filter is applied when it's drawn). */
+    private fun ensureInkCache(a: PageAnnotations): Bitmap? {
+        if (width <= 0 || height <= 0) return null
         var cache = inkCache
         if (cache == null || cache.width != width || cache.height != height) {
             cache?.recycle()
@@ -177,53 +300,71 @@ class PdfPageView(context: Context) : View(context) {
             inkCache = cache
             inkDirty = true
         }
-        val target = cache ?: return
-        if (!inkDirty) return
-        target.eraseColor(Color.TRANSPARENT)
-        renderAnnotations(Canvas(target), a, width.toFloat())
-        inkDirty = false
+        val target = cache ?: return null
+        if (inkDirty) {
+            target.eraseColor(Color.TRANSPARENT)
+            val c = Canvas(target)
+            c.concat(toView)
+            renderAnnotations(c, a, pageScale, null)
+            inkDirty = false
+        }
+        return target
     }
 
-    private fun renderAnnotations(canvas: Canvas, a: PageAnnotations, w: Float) {
-        for (s in a.strokes) drawStroke(canvas, s, w)
+    private fun renderAnnotations(canvas: Canvas, a: PageAnnotations, s: Float, filter: ColorFilter?) {
+        for (st in a.strokes) drawStroke(canvas, st, s, filter)
+        textPaint.colorFilter = filter
         for (t in a.texts) {
             textPaint.color = t.color
-            textPaint.textSize = t.size * w
-            canvas.drawText(t.text, t.x * w, t.y * w, textPaint)
+            textPaint.textSize = t.size * s
+            canvas.drawText(t.text, t.x * s, t.y * s, textPaint)
         }
     }
 
-    private fun drawStroke(canvas: Canvas, s: InkStroke, w: Float) {
-        val pts = s.points
+    private fun drawStroke(canvas: Canvas, st: InkStroke, s: Float, filter: ColorFilter?) {
+        val pts = st.points
         if (pts.isEmpty()) return
-        inkPaint.color = s.color
-        if (s.highlighter) {
+        inkPaint.colorFilter = filter
+        inkPaint.color = st.color
+        if (st.highlighter) {
             inkPaint.alpha = 90
             inkPaint.strokeCap = Paint.Cap.SQUARE
-            inkPaint.strokeWidth = s.width * w
+            inkPaint.strokeWidth = st.width * s
             path.reset()
-            path.moveTo(pts[0].x * w, pts[0].y * w)
-            for (i in 1 until pts.size) path.lineTo(pts[i].x * w, pts[i].y * w)
-            if (pts.size == 1) path.lineTo(pts[0].x * w + 0.1f, pts[0].y * w)
+            path.moveTo(pts[0].x * s, pts[0].y * s)
+            for (i in 1 until pts.size) path.lineTo(pts[i].x * s, pts[i].y * s)
+            if (pts.size == 1) path.lineTo(pts[0].x * s + 0.1f, pts[0].y * s)
             canvas.drawPath(path, inkPaint)
         } else {
             inkPaint.strokeCap = Paint.Cap.ROUND
             if (pts.size == 1) {
-                inkPaint.strokeWidth = s.width * w * pressureScale(pts[0].pressure)
-                canvas.drawPoint(pts[0].x * w, pts[0].y * w, inkPaint)
+                inkPaint.strokeWidth = st.width * s * pressureScale(pts[0].pressure)
+                canvas.drawPoint(pts[0].x * s, pts[0].y * s, inkPaint)
                 return
             }
             // Per-segment width follows pen pressure.
             for (i in 1 until pts.size) {
                 val a = pts[i - 1]
                 val b = pts[i]
-                inkPaint.strokeWidth = s.width * w * pressureScale((a.pressure + b.pressure) / 2f)
-                canvas.drawLine(a.x * w, a.y * w, b.x * w, b.y * w, inkPaint)
+                inkPaint.strokeWidth = st.width * s * pressureScale((a.pressure + b.pressure) / 2f)
+                canvas.drawLine(a.x * s, a.y * s, b.x * s, b.y * s, inkPaint)
             }
         }
     }
 
     // ---------------------------------------------------------------- input
+
+    /** View pixel -> normalized page coordinate (written into [pt]). */
+    private fun toNormalized(x: Float, y: Float): Boolean {
+        ensureMatrix()
+        if (pageScale <= 0f) return false
+        pt[0] = x
+        pt[1] = y
+        toPage.mapPoints(pt)
+        pt[0] /= pageScale
+        pt[1] /= pageScale
+        return true
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -266,7 +407,7 @@ class PdfPageView(context: Context) : View(context) {
                         appendPoints(e)
                         commitStroke(h)
                     }
-                    Mode.TEXT -> if (width > 0) h.requestText(pageIndex, e.x / width, e.y / width)
+                    Mode.TEXT -> if (toNormalized(e.x, e.y)) h.requestText(pageIndex, pt[0], pt[1])
                     else -> {}
                 }
                 endGesture()
@@ -287,9 +428,9 @@ class PdfPageView(context: Context) : View(context) {
                 fingerDownY = e.y
             }
             MotionEvent.ACTION_UP -> {
-                if (hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && width > 0) {
+                if (hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && toNormalized(e.x, e.y)) {
                     performClick()
-                    h.requestText(pageIndex, e.x / width, e.y / width)
+                    h.requestText(pageIndex, pt[0], pt[1])
                 }
             }
         }
@@ -317,9 +458,8 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun addPoint(x: Float, y: Float, pressure: Float) {
-        val w = width.toFloat()
-        if (w <= 0f) return
-        active?.points?.add(StrokePoint(x / w, y / w, pressure))
+        if (!toNormalized(x, y)) return
+        active?.points?.add(StrokePoint(pt[0], pt[1], pressure))
     }
 
     private fun appendPoints(e: MotionEvent) {
@@ -338,7 +478,9 @@ class PdfPageView(context: Context) : View(context) {
         // Draw just the new stroke onto the cache instead of rebuilding everything.
         val cache = inkCache
         if (!inkDirty && cache != null && cache.width == width && cache.height == height) {
-            drawStroke(Canvas(cache), s, width.toFloat())
+            val c = Canvas(cache)
+            c.concat(toView)
+            drawStroke(c, s, pageScale, null)
         } else {
             inkDirty = true
         }
@@ -347,22 +489,22 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun eraseAt(px: Float, py: Float, h: Host) {
-        val w = width.toFloat()
-        if (w <= 0f) return
-        eraserRadius = max(h.strokeWidth * w * 3f, minEraserPx)
+        if (!toNormalized(px, py)) return
+        val s = pageScale
+        eraserRadius = max(h.strokeWidth * s * 3f, minEraserPx)
         eraserX = px
         eraserY = py
         val a = annotations ?: return
-        val x = px / w
-        val y = py / w
-        val rn = eraserRadius / w
-        val strokesRemoved = a.strokes.removeAll { s ->
-            val reach = rn + s.width / 2f
-            s.points.any { p -> hypot(p.x - x, p.y - y) < reach }
+        val x = pt[0]
+        val y = pt[1]
+        val rn = eraserRadius / s
+        val strokesRemoved = a.strokes.removeAll { st ->
+            val reach = rn + st.width / 2f
+            st.points.any { p -> hypot(p.x - x, p.y - y) < reach }
         }
         val textsRemoved = a.texts.removeAll { t ->
-            textPaint.textSize = t.size * w
-            val tw = textPaint.measureText(t.text) / w
+            textPaint.textSize = t.size * s
+            val tw = textPaint.measureText(t.text) / s
             x >= t.x - rn && x <= t.x + tw + rn && y >= t.y - t.size - rn && y <= t.y + rn
         }
         if (strokesRemoved || textsRemoved) {

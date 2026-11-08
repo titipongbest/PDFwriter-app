@@ -31,6 +31,7 @@ import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAnnotation
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineNode
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary
 import com.tom_roush.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream
 import kotlinx.coroutines.Dispatchers
@@ -132,6 +133,27 @@ object PdfAnnotationIO {
                 outline.add(OutlineEntry(title, page, depth))
                 if (depth < 8) readOutline(doc, item, depth + 1, bookmarks, outline)
             }
+        }
+    }
+
+    /** Plain text of each page, for reading mode. Blank string for pages without extractable text. */
+    fun extractText(file: File): List<String> {
+        PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+            val stripper = PDFTextStripper()
+            stripper.sortByPosition = true
+            val out = ArrayList<String>(doc.numberOfPages)
+            for (i in 1..doc.numberOfPages) {
+                stripper.startPage = i
+                stripper.endPage = i
+                out.add(
+                    try {
+                        stripper.getText(doc).trim()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                )
+            }
+            return out
         }
     }
 

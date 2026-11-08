@@ -10,6 +10,10 @@
         android:title="@string/export"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_view_mode"
+        android:title="@string/view_mode"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_reset_zoom"
         android:title="@string/reset_zoom"
         app:showAsAction="never" />

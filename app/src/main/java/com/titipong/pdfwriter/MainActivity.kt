@@ -2,6 +2,7 @@ package com.titipong.pdfwriter
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -45,6 +46,10 @@ import com.titipong.pdfwriter.ui.ColorPicker
 import com.titipong.pdfwriter.ui.PageAdapter
 import com.titipong.pdfwriter.ui.PageGridAdapter
 import com.titipong.pdfwriter.ui.PdfPageView
+import com.titipong.pdfwriter.ui.ReadingAdapter
+import com.titipong.pdfwriter.ui.ViewConfig
+import com.titipong.pdfwriter.ui.ViewModeDialog
+import com.titipong.pdfwriter.ui.ViewSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -100,6 +105,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     /** While pages are being rearranged, no other PDF write may run (it would restore the old layout). */
     private var applyingPages = false
 
+    // View mode (display only)
+    private lateinit var viewSettings: ViewSettings
+    /** Auto-crop bounds per document key (null value = page not cropped). */
+    private val cropCache = mutableMapOf<String, Map<Int, RectF>>()
+    private var cropJob: Job? = null
+    private var readingTexts: List<String>? = null
+    private var readingAdapter: ReadingAdapter? = null
+    private var readingJob: Job? = null
+
     private val toolButtons = mutableMapOf<DrawTool, View>()
     private val colorViews = mutableListOf<View>()
     private val density by lazy { resources.displayMetrics.density }
@@ -122,8 +136,16 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private val backCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
-            closePanelOrEdit()
+            if (binding.pagesPanel.visibility == View.VISIBLE) {
+                closePanelOrEdit()
+            } else if (viewSettings.reading) {
+                exitReading()
+            }
         }
+    }
+
+    private fun updateBackEnabled() {
+        backCallback.isEnabled = binding.pagesPanel.visibility == View.VISIBLE || viewSettings.reading
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -133,6 +155,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = getString(R.string.app_name)
         onBackPressedDispatcher.addCallback(this, backCallback)
+        viewSettings = ViewSettings.load(prefs)
 
         binding.recycler.layoutManager = LinearLayoutManager(this)
         binding.recycler.setItemViewCacheSize(2)
@@ -215,6 +238,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (document != null) exportPdf.launch(docName.removeSuffix(".pdf") + "-annotated.pdf")
             true
         }
+        R.id.action_view_mode -> {
+            showViewModeDialog()
+            true
+        }
         R.id.action_reset_zoom -> {
             binding.recycler.resetZoom()
             true
@@ -255,6 +282,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons.forEach { (t, v) -> v.setOnClickListener { selectTool(t) } }
         binding.btnUndo.setOnClickListener { undoLast() }
         binding.btnPages.setOnClickListener { openPanel(bookmarksTab = false) }
+        binding.btnViewMode.setOnClickListener { showViewModeDialog() }
+        binding.btnTextSmaller.setOnClickListener { changeReadingSize(-2f) }
+        binding.btnTextBigger.setOnClickListener { changeReadingSize(+2f) }
+        binding.btnReadingExit.setOnClickListener { exitReading() }
+        binding.readingList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                updatePageIndicator()
+            }
+        })
         binding.btnBookmark.setOnClickListener { toggleBookmark() }
         binding.btnBookmark.setOnLongClickListener {
             openPanel(bookmarksTab = true)
@@ -362,7 +398,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         promptText(getString(R.string.add_text), "") { text ->
             val note = TextNote(text, x, y, color, 0.018f + 0.004f * sizeValue)
             annotationsFor(page).texts.add(note)
-            adapter?.notifyItemChanged(page, PageAdapter.INK_PAYLOAD)
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
             onItemAdded(page, note)
         }
     }
@@ -404,7 +440,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 else -> false
             }
             if (removed) {
-                adapter?.notifyItemChanged(page, PageAdapter.INK_PAYLOAD)
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
                 markDirty()
                 return
             }
@@ -424,7 +460,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                     it.strokes.clear()
                     it.texts.clear()
                 }
-                adapter?.notifyItemChanged(page, PageAdapter.INK_PAYLOAD)
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
                 markDirty()
             }
             .setNegativeButton(R.string.cancel, null)
@@ -473,7 +509,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun bookmarksChanged(page: Int) {
-        adapter?.notifyItemChanged(page, PageAdapter.INK_PAYLOAD)
+        adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
         updateBookmarkButton()
         refreshBookmarkList()
         markDirty()
@@ -568,7 +604,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         setEditMode(false)
         binding.pagesPanel.visibility = View.VISIBLE
         binding.toolStrip.visibility = View.GONE
-        backCallback.isEnabled = true
+        updateBackEnabled()
         binding.panelTabs.getTabAt(if (bookmarksTab) 1 else 0)?.select()
         showPanelTab(bookmarksTab)
     }
@@ -636,14 +672,20 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.toolStrip.visibility = View.VISIBLE
         binding.pagesGrid.adapter = null
         gridAdapter = null
-        backCallback.isEnabled = false
+        updateBackEnabled()
     }
 
     private fun jumpTo(page: Int) {
         closePanelOrEdit()
         if (gridAdapter != null) return // still in edit mode (user kept editing)
+        if (viewSettings.reading) {
+            (binding.readingList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(page, 0)
+            binding.recycler.post { updatePageIndicator() }
+            return
+        }
         binding.recycler.resetZoom()
-        (binding.recycler.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(page, 0)
+        val pos = adapter?.positionOf(page) ?: page
+        (binding.recycler.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
         binding.recycler.post { updatePageIndicator() }
     }
 
@@ -779,12 +821,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             pages = newPages
             bookmarks = newBookmarks
             history.clear()
+            cropCache.remove(key)
+            readingTexts = null
 
-            binding.recycler.resetZoom()
-            val a = PageAdapter(opened.first, this@MainActivity, lifecycleScope)
-            adapter = a
-            binding.recycler.adapter = a
+            val keepPage = currentPage().coerceIn(0, (opened.first.pageCount - 1).coerceAtLeast(0))
             closePanelForce()
+            applyView(keepPage)
             setStatus(R.string.saved_in_pdf)
             binding.recycler.post { updatePageIndicator() }
             Toast.makeText(this@MainActivity, R.string.pages_saved, Toast.LENGTH_SHORT).show()
@@ -1009,11 +1051,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             changeVersion = 0
             pdfSavedVersion = 0
 
-            binding.recycler.resetZoom()
-            val a = PageAdapter(opened.doc, this@MainActivity, lifecycleScope)
-            adapter = a
-            binding.recycler.adapter = a
+            readingTexts = null
             binding.emptyView.visibility = View.GONE
+            applyView(0)
             supportActionBar?.title = name
             setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
             binding.recycler.post { updatePageIndicator() }
@@ -1073,8 +1113,153 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun currentPage(): Int {
+        if (viewSettings.reading && binding.readingPanel.visibility == View.VISIBLE) {
+            val rl = binding.readingList.layoutManager as? LinearLayoutManager
+            val p = rl?.findFirstVisibleItemPosition() ?: -1
+            if (p >= 0) return p
+        }
         val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return -1
-        return lm.findFirstVisibleItemPosition()
+        var pos = if (binding.recycler.horizontalPaging) lm.findFirstCompletelyVisibleItemPosition() else -1
+        if (pos < 0) pos = lm.findFirstVisibleItemPosition()
+        if (pos < 0) return -1
+        return adapter?.firstPageAt(pos)?.takeIf { it >= 0 } ?: pos
+    }
+
+    // ================================================================ view mode
+
+    private fun showViewModeDialog() {
+        ViewModeDialog(this, viewSettings) {
+            viewSettings.save(prefs)
+            applyView(currentPage().coerceAtLeast(0))
+        }.show()
+    }
+
+    /** Rebuilds the reader for the current view settings, keeping [page] in view. */
+    private fun applyView(page: Int) {
+        binding.recycler.setBackgroundColor(viewSettings.listBackground())
+        val doc = document ?: return
+        if (viewSettings.reading) {
+            showReading(page)
+            return
+        }
+        hideReading()
+        val key = docKey
+        val crops = if (viewSettings.crop && key != null) {
+            cropCache[key] ?: run {
+                startCropDetection(doc, key)
+                null
+            }
+        } else {
+            null
+        }
+        val config = ViewConfig(
+            layout = viewSettings.layout,
+            vertical = viewSettings.vertical,
+            rotation = viewSettings.rotation,
+            crops = crops,
+            look = viewSettings.look()
+        )
+        val lm = LinearLayoutManager(
+            this,
+            if (viewSettings.vertical) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
+            false
+        )
+        binding.recycler.adapter = null
+        binding.recycler.layoutManager = lm
+        binding.recycler.setPagingMode(!viewSettings.vertical)
+        val a = PageAdapter(doc, this, lifecycleScope, config)
+        adapter = a
+        binding.recycler.adapter = a
+        lm.scrollToPositionWithOffset(a.positionOf(page.coerceIn(0, (doc.pageCount - 1).coerceAtLeast(0))), 0)
+        binding.recycler.post { updatePageIndicator() }
+    }
+
+    /** Finds each page's content area once per document, then re-applies the view. */
+    private fun startCropDetection(doc: PdfDocumentRenderer, key: String) {
+        if (cropJob?.isActive == true) return
+        cropJob = lifecycleScope.launch {
+            val result = HashMap<Int, RectF>()
+            for (i in 0 until doc.pageCount) {
+                val r = try { doc.contentBounds(i) } catch (e: Exception) { null }
+                if (r != null) result[i] = r
+                if (i % 5 == 0 && docKey == key) {
+                    binding.tvSaveState.text = getString(R.string.crop_progress, i + 1, doc.pageCount)
+                }
+                if (document !== doc) return@launch
+            }
+            cropCache[key] = result
+            setStatus(if (pdfWritable) R.string.saved_in_pdf else R.string.saved_in_app)
+            if (docKey == key && viewSettings.crop && !viewSettings.reading) applyView(currentPage().coerceAtLeast(0))
+        }
+    }
+
+    // ================================================================ reading mode
+
+    private fun showReading(page: Int) {
+        binding.readingPanel.visibility = View.VISIBLE
+        binding.readingPanel.setBackgroundColor(viewSettings.readingBackground())
+        binding.readingTitle.setTextColor(viewSettings.readingText())
+        if (binding.readingList.layoutManager == null) binding.readingList.layoutManager = LinearLayoutManager(this)
+        updateBackEnabled()
+        val texts = readingTexts
+        if (texts != null) {
+            bindReading(texts, page)
+            return
+        }
+        val src = localCopy ?: return
+        binding.readingTitle.setText(R.string.reading_loading)
+        readingJob?.cancel()
+        readingJob = lifecycleScope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) { PdfAnnotationIO.extractText(src) }
+            } catch (e: Throwable) {
+                null
+            }
+            if (result == null) {
+                Toast.makeText(this@MainActivity, R.string.reading_failed, Toast.LENGTH_LONG).show()
+                viewSettings.reading = false
+                viewSettings.save(prefs)
+                applyView(page)
+                return@launch
+            }
+            readingTexts = result
+            if (viewSettings.reading) bindReading(result, page)
+        }
+    }
+
+    private fun bindReading(texts: List<String>, page: Int) {
+        binding.readingTitle.setText(R.string.reading_title)
+        val ra = ReadingAdapter(texts).apply {
+            textColor = viewSettings.readingText()
+            mutedColor = Color.argb(150, Color.red(textColor), Color.green(textColor), Color.blue(textColor))
+            textSize = viewSettings.readingTextSize
+        }
+        readingAdapter = ra
+        binding.readingList.adapter = ra
+        (binding.readingList.layoutManager as? LinearLayoutManager)
+            ?.scrollToPositionWithOffset(page.coerceIn(0, (texts.size - 1).coerceAtLeast(0)), 0)
+        binding.recycler.post { updatePageIndicator() }
+    }
+
+    private fun hideReading() {
+        readingJob?.cancel()
+        binding.readingPanel.visibility = View.GONE
+        binding.readingList.adapter = null
+        readingAdapter = null
+        updateBackEnabled()
+    }
+
+    private fun exitReading() {
+        val page = currentPage().coerceAtLeast(0)
+        viewSettings.reading = false
+        viewSettings.save(prefs)
+        applyView(page)
+    }
+
+    private fun changeReadingSize(delta: Float) {
+        viewSettings.readingTextSize = (viewSettings.readingTextSize + delta).coerceIn(12f, 40f)
+        viewSettings.save(prefs)
+        readingAdapter?.textSize = viewSettings.readingTextSize
     }
 
     private fun updatePageIndicator() {

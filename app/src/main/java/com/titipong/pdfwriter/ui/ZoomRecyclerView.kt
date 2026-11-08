@@ -7,12 +7,19 @@ import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import androidx.recyclerview.widget.PagerSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.roundToInt
 
 /**
- * Vertical page list with two-finger pinch zoom, one-finger pan when zoomed, and double-tap zoom.
- * Children receive touch events already mapped back to unzoomed coordinates, so drawing keeps working.
+ * Page list with two-finger pinch zoom, one-finger pan when zoomed, and double-tap zoom.
+ *
+ * Works in two modes:
+ *  - vertical: continuous vertical scrolling (the list scrolls Y, zoom pans X)
+ *  - horizontal paging: one spread per screen, swipe left/right (the list scrolls X, zoom pans Y);
+ *    pages snap into place when not zoomed.
+ *
+ * Children receive touch events mapped back to unzoomed coordinates, so drawing keeps working.
  * Gestures only react to fingers: the S Pen never zooms or pans, and a palm resting while writing
  * (finger + stylus) doesn't count as a pinch.
  */
@@ -24,15 +31,25 @@ class ZoomRecyclerView @JvmOverloads constructor(
     var scale = 1f
         private set
     private var tx = 0f
+    private var ty = 0f
     private val inverse = Matrix()
 
     /** Called when a zoom gesture finishes, with the final scale. */
     var onZoomSettled: ((Float) -> Unit)? = null
 
-    private var basePaddingBottom = -1
+    var horizontalPaging = false
+        private set
+    private val snapHelper = PagerSnapHelper()
+    private var snapAttached = false
+
+    // Padding from XML (used in vertical mode); horizontal paging uses none.
+    private val xmlPadding = intArrayOf(paddingLeft, paddingTop, paddingRight, paddingBottom)
+    private val base = xmlPadding.copyOf()
+
     private var blocking = false
     private var cancelSent = false
     private var lastPanX = 0f
+    private var lastPanY = 0f
     private var lastFocusX = 0f
     private var lastFocusY = 0f
 
@@ -45,11 +62,17 @@ class ZoomRecyclerView @JvmOverloads constructor(
 
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             // Pan with the moving focus, then zoom around it.
-            tx += detector.focusX - lastFocusX
-            val dy = (lastFocusY - detector.focusY) / scale
+            val dfx = detector.focusX - lastFocusX
+            val dfy = detector.focusY - lastFocusY
             lastFocusX = detector.focusX
             lastFocusY = detector.focusY
-            scrollBy(0, dy.roundToInt())
+            if (horizontalPaging) {
+                ty += dfy
+                scrollBy((-dfx / scale).roundToInt(), 0)
+            } else {
+                tx += dfx
+                scrollBy(0, (-dfy / scale).roundToInt())
+            }
             zoomTo(scale * detector.scaleFactor, detector.focusX, detector.focusY)
             return true
         }
@@ -67,47 +90,94 @@ class ZoomRecyclerView @JvmOverloads constructor(
         }
     })
 
+    /** Switches between vertical scrolling and horizontal paging (resets zoom). */
+    fun setPagingMode(horizontal: Boolean) {
+        horizontalPaging = horizontal
+        scale = 1f
+        tx = 0f
+        ty = 0f
+        if (horizontal) base.fill(0) else xmlPadding.copyInto(base)
+        setPadding(base[0], base[1], base[2], base[3])
+        updateSnap()
+        updateMatrix()
+        invalidate()
+    }
+
     fun resetZoom() {
         zoomTo(1f, 0f, 0f)
         onZoomSettled?.invoke(scale)
     }
 
+    private fun updateSnap() {
+        val want = horizontalPaging && scale <= 1.01f
+        if (want && !snapAttached) {
+            try {
+                snapHelper.attachToRecyclerView(this)
+                snapAttached = true
+            } catch (e: IllegalStateException) {
+                // Another fling listener is set; paging just won't snap.
+            }
+        } else if (!want && snapAttached) {
+            snapHelper.attachToRecyclerView(null)
+            snapAttached = false
+        }
+    }
+
     private fun zoomTo(target: Float, fx: Float, fy: Float) {
         val s = target.coerceIn(MIN_SCALE, MAX_SCALE)
         if (s != scale) {
-            val contentX = (fx - tx) / scale
-            tx = fx - contentX * s
-            val dy = fy / scale - fy / s
-            scale = s
-            updateBottomPadding()
-            scrollBy(0, dy.roundToInt())
+            if (horizontalPaging) {
+                val contentY = (fy - ty) / scale
+                ty = fy - contentY * s
+                val dx = fx / scale - fx / s
+                scale = s
+                updateExtraPadding()
+                scrollBy(dx.roundToInt(), 0)
+            } else {
+                val contentX = (fx - tx) / scale
+                tx = fx - contentX * s
+                val dy = fy / scale - fy / s
+                scale = s
+                updateExtraPadding()
+                scrollBy(0, dy.roundToInt())
+            }
+            updateSnap()
         }
-        clampTx()
+        clampPan()
         updateMatrix()
         invalidate()
     }
 
-    /** Extra bottom padding so the end of the last page is reachable while zoomed in. */
-    private fun updateBottomPadding() {
-        if (basePaddingBottom < 0) basePaddingBottom = paddingBottom
-        val extra = if (height > 0) (height - height / scale).roundToInt() else 0
-        setPadding(paddingLeft, paddingTop, paddingRight, basePaddingBottom + extra)
+    /** Extra padding at the end of the scroll axis so the last page is fully reachable when zoomed. */
+    private fun updateExtraPadding() {
+        if (horizontalPaging) {
+            val extra = if (width > 0) (width - width / scale).roundToInt() else 0
+            setPadding(base[0], base[1], base[2] + extra, base[3])
+        } else {
+            val extra = if (height > 0) (height - height / scale).roundToInt() else 0
+            setPadding(base[0], base[1], base[2], base[3] + extra)
+        }
     }
 
-    private fun clampTx() {
-        val minTx = width - width * scale
-        tx = tx.coerceIn(minTx, 0f)
+    private fun clampPan() {
+        if (horizontalPaging) {
+            tx = 0f
+            ty = ty.coerceIn(height - height * scale, 0f)
+        } else {
+            ty = 0f
+            tx = tx.coerceIn(width - width * scale, 0f)
+        }
     }
 
     private fun updateMatrix() {
         inverse.reset()
-        inverse.setTranslate(-tx, 0f)
+        inverse.setTranslate(-tx, -ty)
         inverse.postScale(1f / scale, 1f / scale)
     }
 
     override fun dispatchDraw(canvas: Canvas) {
         canvas.save()
-        canvas.translate(tx, 0f)
+        canvas.translate(tx, ty)
         canvas.scale(scale, scale)
         super.dispatchDraw(canvas)
         canvas.restore()
@@ -147,14 +217,18 @@ class ZoomRecyclerView @JvmOverloads constructor(
             return true
         }
 
-        // One-finger horizontal pan while zoomed (vertical is the list's own scrolling).
+        // One-finger pan across the scroll direction while zoomed (along it is the list's own scrolling).
         if (fingers && ev.pointerCount == 1 && scale > 1f) {
             when (action) {
-                MotionEvent.ACTION_DOWN -> lastPanX = ev.x
-                MotionEvent.ACTION_MOVE -> {
-                    tx += ev.x - lastPanX
+                MotionEvent.ACTION_DOWN -> {
                     lastPanX = ev.x
-                    clampTx()
+                    lastPanY = ev.y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (horizontalPaging) ty += ev.y - lastPanY else tx += ev.x - lastPanX
+                    lastPanX = ev.x
+                    lastPanY = ev.y
+                    clampPan()
                     updateMatrix()
                     invalidate()
                 }
@@ -171,8 +245,8 @@ class ZoomRecyclerView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (scale != 1f) {
-            updateBottomPadding()
-            clampTx()
+            updateExtraPadding()
+            clampPan()
             updateMatrix()
         }
     }
