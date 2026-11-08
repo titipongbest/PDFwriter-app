@@ -120,6 +120,10 @@ class PdfPageView(context: Context) : View(context) {
             invalidate()
         }
 
+    /** Called (at most every 1.5 s) when this page is drawn without its image, so it can be re-rendered. */
+    var onNeedBitmap: (() -> Unit)? = null
+    private var lastNeedRequest = 0L
+
     var annotations: PageAnnotations? = null
         set(value) {
             field = value
@@ -312,6 +316,15 @@ class PdfPageView(context: Context) : View(context) {
         canvas.save()
         canvas.concat(toView)
         val bmp = bitmap
+        if ((bmp == null || bmp.isRecycled) && pageIndex >= 0 && onNeedBitmap != null) {
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - lastNeedRequest > 1500) {
+                lastNeedRequest = now
+                post { onNeedBitmap?.invoke() }
+                // Look again later in case this request also fails.
+                postInvalidateDelayed(2000)
+            }
+        }
         if (bmp != null && !bmp.isRecycled) {
             dst.set(0f, 0f, s, pageAspect * s)
             bitmapPaint.colorFilter = lk.pageFilter

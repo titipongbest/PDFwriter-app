@@ -69,7 +69,15 @@ class PageAdapter(
         }
         view.fitViewport = !config.vertical
         view.pages.forEach { it.host = host }
-        return Holder(view)
+        val holder = Holder(view)
+        // Self-healing: a page still blank when drawn (render failed / was lost) asks to be rendered again.
+        view.pages.forEachIndexed { slot, pv ->
+            pv.onNeedBitmap = {
+                val page = pv.pageIndex
+                if (page >= 0 && pv.bitmap == null && holder.jobs[slot]?.isActive != true) render(holder, slot, page)
+            }
+        }
+        return holder
     }
 
     override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
@@ -126,10 +134,22 @@ class PageAdapter(
             holder.jobs[slot]?.cancel()
             holder.jobs[slot] = scope.launch {
                 val target = (v.renderWidth().coerceAtLeast(v.width) * renderScale).toInt()
-                val bmp = try {
-                    doc.render(page, target)
-                } catch (e: Exception) {
-                    null
+                // Retry failed renders (e.g. memory pressure), at a lower resolution after the first tries.
+                var bmp: android.graphics.Bitmap? = null
+                var attempt = 0
+                while (bmp == null && attempt < RENDER_ATTEMPTS && v.pageIndex == page) {
+                    val factor = if (attempt < 2) 1f else Math.pow(0.7, (attempt - 1).toDouble()).toFloat()
+                    bmp = try {
+                        doc.render(page, (target * factor).toInt())
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        null
+                    }
+                    if (bmp == null) {
+                        attempt++
+                        kotlinx.coroutines.delay(300L * attempt)
+                    }
                 }
                 if (bmp != null && v.pageIndex == page) v.bitmap = bmp
             }
@@ -148,6 +168,7 @@ class PageAdapter(
         const val INK_PAYLOAD = "ink"
         const val RERENDER_PAYLOAD = "rerender"
         const val SEARCH_PAYLOAD = "search"
+        private const val RENDER_ATTEMPTS = 5
 
         fun buildSpreads(count: Int, layout: PageLayout): List<IntArray> {
             val out = ArrayList<IntArray>()

@@ -24,7 +24,10 @@ class PdfDocumentRenderer private constructor(
     @Volatile
     private var closed = false
 
-    private val cache = object : LruCache<Int, Bitmap>((Runtime.getRuntime().maxMemory() / 5).toInt()) {
+    // Page images live in native memory; keep the cache modest so rendering more pages doesn't fail.
+    private val cache = object : LruCache<Int, Bitmap>(
+        minOf(Runtime.getRuntime().maxMemory() / 5, 96L * 1024 * 1024).toInt()
+    ) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
 
