@@ -1,0 +1,42 @@
+name: Thai OCR check
+on:
+  push:
+    branches: [ ocrtest ]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr fonts-thai-tlwg fonts-noto-core >/dev/null
+          pip install pillow
+          tesseract --version | head -1
+          fc-list | grep -iE "thai|garuda|loma|sarabun" | head
+      - name: Models
+        working-directory: tools/ocrtest
+        run: |
+          mkdir -p fast best
+          for l in tha eng; do
+            curl -sSL -o fast/$l.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata
+            curl -sSL -o best/$l.traineddata https://github.com/tesseract-ocr/tessdata_best/raw/main/$l.traineddata
+          done
+          ls -la fast best
+      - name: OCR fast vs best
+        working-directory: tools/ocrtest
+        run: |
+          F=$(fc-list | grep -iE "Garuda\.ttf|Garuda-Regular|Loma\.ttf" | head -1 | cut -d: -f1)
+          echo "font $F"
+          python3 ocr_test.py "$F"
+          F2=$(fc-list | grep -i "NotoSansThai-Regular" | head -1 | cut -d: -f1)
+          echo "font $F2"; [ -n "$F2" ] && python3 ocr_test.py "$F2" || true
+      - name: PDF text layer round trip
+        working-directory: tools/ocrtest
+        run: |
+          curl -sSL -o pdfbox.jar https://repo1.maven.org/maven2/org/apache/pdfbox/pdfbox/2.0.27/pdfbox-2.0.27.jar
+          curl -sSL -o fontbox.jar https://repo1.maven.org/maven2/org/apache/pdfbox/fontbox/2.0.27/fontbox-2.0.27.jar
+          curl -sSL -o logging.jar https://repo1.maven.org/maven2/commons-logging/commons-logging/1.2/commons-logging-1.2.jar
+          F2=$(fc-list | grep -i "NotoSansThai-Regular" | head -1 | cut -d: -f1)
+          echo "font $F2"
+          java -cp pdfbox.jar:fontbox.jar:logging.jar PdfRoundTrip.java "$F2"
