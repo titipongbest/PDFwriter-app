@@ -29,25 +29,78 @@ class OcrEngine(context: Context) : Closeable {
     }
 
     fun recognize(bitmap: Bitmap): List<Word> {
-        val words = ArrayList<Word>()
         val w = bitmap.width.toFloat()
         api.setImage(bitmap)
-        api.getUTF8Text() // runs recognition
-        val it = api.getResultIterator() ?: return words
         try {
-            it.begin()
-            do {
-                val text = it.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_WORD)?.trim()
-                val r = it.getBoundingRect(TessBaseAPI.PageIteratorLevel.RIL_WORD)
-                if (!text.isNullOrEmpty() && r.width() > 0 && r.height() > 0) {
-                    words.add(Word(text, RectF(r.left / w, r.top / w, r.right / w, r.bottom / w)))
+            val full = api.getUTF8Text() ?: return emptyList() // runs recognition
+            fun norm(r: android.graphics.Rect) = RectF(r.left / w, r.top / w, r.right / w, r.bottom / w)
+            // Each recognized character with its box, in reading order.
+            val symbols = ArrayList<Pair<String, RectF>>()
+            val words = ArrayList<Word>()
+            api.getResultIterator()?.let { it ->
+                try {
+                    it.begin()
+                    do {
+                        val t = it.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_SYMBOL)
+                        val r = it.getBoundingRect(TessBaseAPI.PageIteratorLevel.RIL_SYMBOL)
+                        if (!t.isNullOrEmpty()) symbols.add(t to norm(r))
+                    } while (it.next(TessBaseAPI.PageIteratorLevel.RIL_SYMBOL))
+                } finally {
+                    it.delete()
                 }
-            } while (it.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
+            }
+            byTesseractSpacing(full, symbols)?.let { return it }
+            // Fallback: Tesseract's own words, with Thai pieces joined.
+            api.getResultIterator()?.let { it ->
+                try {
+                    it.begin()
+                    do {
+                        val text = it.getUTF8Text(TessBaseAPI.PageIteratorLevel.RIL_WORD)?.trim()
+                        val r = it.getBoundingRect(TessBaseAPI.PageIteratorLevel.RIL_WORD)
+                        if (!text.isNullOrEmpty() && r.width() > 0 && r.height() > 0) words.add(Word(text, norm(r)))
+                    } while (it.next(TessBaseAPI.PageIteratorLevel.RIL_WORD))
+                } finally {
+                    it.delete()
+                }
+            }
+            return mergeThai(words)
         } finally {
-            it.delete()
             api.clear()
         }
-        return mergeThai(words)
+    }
+
+    /**
+     * Words split where Tesseract's page text has spaces (its Thai spacing is good), each with the
+     * union box of its characters. Thai has no spaces inside words, but Tesseract's word boxes
+     * often cut Thai into single letters; its plain text doesn't. Null if the two don't line up.
+     */
+    private fun byTesseractSpacing(full: String, symbols: List<Pair<String, RectF>>): List<Word>? {
+        val owner = ArrayList<Int>()
+        val chars = StringBuilder()
+        symbols.forEachIndexed { i, (t, _) -> for (c in t) if (!c.isWhitespace()) { chars.append(c); owner.add(i) } }
+        val compact = full.filterNot { it.isWhitespace() }
+        if (compact.isEmpty() || compact != chars.toString()) return null
+        val out = ArrayList<Word>()
+        val text = StringBuilder()
+        var box: RectF? = null
+        var k = 0
+        fun flush() {
+            val b = box
+            if (text.isNotEmpty() && b != null && b.width() > 0f && b.height() > 0f) out.add(Word(text.toString(), b))
+            text.setLength(0)
+            box = null
+        }
+        for (c in full) {
+            if (c.isWhitespace()) {
+                flush()
+                continue
+            }
+            val r = symbols[owner[k++]].second
+            text.append(c)
+            box = box?.apply { union(r) } ?: RectF(r)
+        }
+        flush()
+        return out
     }
 
     /**
