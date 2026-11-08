@@ -270,6 +270,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         })
         binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
         binding.recycler.onSingleTap = { onPageSingleTap() }
+        binding.pageScrubber.onScrub = { page, _ -> scrubToPage(page) }
         binding.btnOpenEmpty.setOnClickListener { launchPicker() }
         binding.tvCredit.text = getString(R.string.credit_line, appVersion())
 
@@ -1998,7 +1999,30 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (view) prepareTextIndex()
     }
 
+    /** View mode's fast scrubber: shown when a document is open. */
+    private fun updateScrubber() {
+        val doc = document
+        binding.pageScrubber.visibility =
+            if (interactionView && doc != null && doc.pageCount > 1) View.VISIBLE else View.GONE
+        binding.pageScrubber.pageCount = doc?.pageCount ?: 0
+        val p = currentPage()
+        if (p >= 0) binding.pageScrubber.page = p
+    }
+
+    /** Jumps straight to a page while scrubbing (keeps the zoom level). */
+    private fun scrubToPage(page: Int) {
+        if (viewSettings.reading) {
+            (binding.readingList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(page, 0)
+        } else {
+            val pos = adapter?.positionOf(page) ?: return
+            (binding.recycler.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
+        }
+        clearSelection()
+        binding.recycler.post { updatePageIndicator() }
+    }
+
     private fun showModeTools() {
+        updateScrubber()
         binding.btnMode.setText(currentMode.label)
         binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
         binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
@@ -2766,6 +2790,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         supportActionBar?.subtitle =
             if (total > 0 && first >= 0) getString(R.string.page_of, first + 1, total) else null
         updateBookmarkButton()
+        updateScrubber()
     }
 
     companion object {

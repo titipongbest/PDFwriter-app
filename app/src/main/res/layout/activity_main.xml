@@ -473,6 +473,14 @@
                 android:layout_weight="1" />
         </LinearLayout>
 
+        <!-- Fast page scrubber on the right edge (view mode) -->
+        <com.titipong.pdfwriter.ui.PageScrubber
+            android:id="@+id/pageScrubber"
+            android:layout_width="160dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end"
+            android:visibility="gone" />
+
         <!-- Page overview / bookmarks panel -->
         <LinearLayout
             android:id="@+id/pagesPanel"
