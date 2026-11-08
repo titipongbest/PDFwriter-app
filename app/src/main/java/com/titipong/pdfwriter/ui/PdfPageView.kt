@@ -462,6 +462,27 @@ class PdfPageView(context: Context) : View(context) {
             drawStroke(canvas, it, s, lk.inkFilter)
             canvas.restore()
         }
+        // On top of everything (never baked into the ink cache): the lasso and alignment guides.
+        if (lasso.size > 1 || guidesX.isNotEmpty() || guidesY.isNotEmpty()) {
+            canvas.save()
+            canvas.concat(toView)
+            // Lasso being drawn.
+            if (lasso.size > 1) {
+                lassoPath.reset()
+                lassoPath.moveTo(lasso[0].x * s, lasso[0].y * s)
+                for (i in 1 until lasso.size) lassoPath.lineTo(lasso[i].x * s, lasso[i].y * s)
+                lassoPath.close()
+                canvas.drawPath(lassoPath, lassoFill)
+                canvas.drawPath(lassoPath, lassoPaint)
+            }
+            // While dragging: alignment guides.
+            if (guidesX.isNotEmpty() || guidesY.isNotEmpty()) {
+                val ph = pageAspect * s
+                for (gx in guidesX) canvas.drawLine(gx * s, 0f, gx * s, ph, guidePaint)
+                for (gy in guidesY) canvas.drawLine(0f, gy * s, s, gy * s, guidePaint)
+            }
+            canvas.restore()
+        }
         if (bookmarked) drawRibbon(canvas, width.toFloat())
         if (mode == Mode.ERASE) canvas.drawCircle(eraserX, eraserY, eraserRadius, eraserPaint)
     }
@@ -526,21 +547,6 @@ class PdfPageView(context: Context) : View(context) {
                 val ly = t.y + t.size * TextLayout.LINE_HEIGHT * i
                 canvas.drawText(line.text, lx * s, ly * s, textPaint)
             }
-        }
-        // Lasso being drawn.
-        if (lasso.size > 1) {
-            lassoPath.reset()
-            lassoPath.moveTo(lasso[0].x * s, lasso[0].y * s)
-            for (i in 1 until lasso.size) lassoPath.lineTo(lasso[i].x * s, lasso[i].y * s)
-            lassoPath.close()
-            canvas.drawPath(lassoPath, lassoFill)
-            canvas.drawPath(lassoPath, lassoPaint)
-        }
-        // While dragging: alignment guides.
-        if (guidesX.isNotEmpty() || guidesY.isNotEmpty()) {
-            val ph = pageAspect * s
-            for (gx in guidesX) canvas.drawLine(gx * s, 0f, gx * s, ph, guidePaint)
-            for (gy in guidesY) canvas.drawLine(0f, gy * s, s, gy * s, guidePaint)
         }
     }
 
