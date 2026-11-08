@@ -40,3 +40,9 @@ jobs:
           F2=$(fc-list | grep -i "NotoSansThai-Regular" | head -1 | cut -d: -f1)
           echo "font $F2"
           java -cp pdfbox.jar:fontbox.jar:logging.jar PdfRoundTrip.java "$F2"
+      - name: Font URL
+        run: |
+          curl -sSL -o NotoSansThai-Regular.ttf https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansThai/hinted/ttf/NotoSansThai-Regular.ttf
+          ls -la NotoSansThai-Regular.ttf; file NotoSansThai-Regular.ttf
+          base64 -w0 NotoSansThai-Regular.ttf > font.b64; echo "B64LEN $(wc -c < font.b64)"
+          echo "FONTB64 $(cat font.b64)"
