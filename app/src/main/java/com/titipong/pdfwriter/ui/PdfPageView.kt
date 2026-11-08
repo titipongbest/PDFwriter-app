@@ -316,13 +316,15 @@ class PdfPageView(context: Context) : View(context) {
         canvas.save()
         canvas.concat(toView)
         val bmp = bitmap
-        if ((bmp == null || bmp.isRecycled) && pageIndex >= 0 && onNeedBitmap != null) {
+        // Self-healing: drawn without its image, or only with a small blurry preview.
+        val needsSharp = bmp == null || bmp.isRecycled || bmp.width < minOf(s, 2800f) * 0.85f
+        if (needsSharp && pageIndex >= 0 && onNeedBitmap != null) {
             val now = android.os.SystemClock.uptimeMillis()
-            if (now - lastNeedRequest > 1500) {
+            if (now - lastNeedRequest > 700) {
                 lastNeedRequest = now
                 post { onNeedBitmap?.invoke() }
                 // Look again later in case this request also fails.
-                postInvalidateDelayed(2000)
+                postInvalidateDelayed(1000)
             }
         }
         if (bmp != null && !bmp.isRecycled) {

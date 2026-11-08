@@ -48,9 +48,11 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
+            adb shell wm size 1200x1920
+            adb shell wm density 240
             adb logcat -G 16M || true
             adb logcat -c || true
-            ./gradlew connectedDebugAndroidTest -PallAbis || true
+            ./gradlew connectedDebugAndroidTest -PallAbis -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || true
             adb logcat -d -s PWPERF:I > perf.log || true
             mkdir -p shots && adb pull /sdcard/Android/data/com.titipong.pdfwriter/files/perf shots || true
 
@@ -59,8 +61,8 @@ jobs:
           wc -l perf.log || true
           cat perf.log || true
           find shots -type f | sort || true
-          cd shots && zip -r ../perf-shots.zip . && cd ..
-          cp perf.log perf-log.txt
+          (cd shots && zip -qr ../perf-shots.zip .) || true
+          cp perf.log perf-log.txt || true
 
       - name: Publish results
         uses: softprops/action-gh-release@v2

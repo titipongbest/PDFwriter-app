@@ -99,7 +99,10 @@ class PageAdapter(
         view.pages.forEachIndexed { slot, pv ->
             pv.onNeedBitmap = {
                 val page = pv.pageIndex
-                if (page >= 0 && pv.bitmap == null && holder.jobs[slot]?.isActive != true) render(holder, slot, page)
+                if (page >= 0 && holder.jobs[slot]?.isActive != true) {
+                    com.titipong.pdfwriter.Perf.log("heal p=$page shown=${pv.bitmap?.width ?: 0}")
+                    render(holder, slot, page)
+                }
             }
         }
         return holder
@@ -160,8 +163,10 @@ class PageAdapter(
     private fun render(holder: Holder, slot: Int, page: Int) {
         val v = holder.spread.pages[slot]
         holder.jobs[slot]?.cancel()
-        v.doOnLayout {
-            if (v.pageIndex != page) return@doOnLayout
+        // Start now when the size is already known (waiting for a layout that may never come left
+        // pages blurry); otherwise once laid out.
+        val go: (android.view.View) -> Unit = go@{
+            if (v.pageIndex != page) return@go
             holder.jobs[slot]?.cancel()
             holder.jobs[slot] = scope.launch {
                 val t0 = com.titipong.pdfwriter.Perf.now()
@@ -208,6 +213,7 @@ class PageAdapter(
                 }
             }
         }
+        if (v.width > 0) go(v) else v.doOnLayout(go)
     }
 
     override fun onViewRecycled(holder: Holder) {
