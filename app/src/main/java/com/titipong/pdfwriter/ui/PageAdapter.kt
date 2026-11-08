@@ -54,9 +54,10 @@ class PageAdapter(
         prefetchJob = scope.launch {
             kotlinx.coroutines.delay(120)
             for (q in intArrayOf(page + 1, page + 2, page - 1)) {
-                if (q !in 0 until doc.pageCount || doc.isReady(q, width)) continue
+                if (q !in 0 until doc.pageCount) continue
+                if (kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { doc.isReady(q, width) }) continue
                 try {
-                    doc.render(q, width)
+                    doc.render(q, width, urgent = false)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Throwable) {
@@ -162,7 +163,21 @@ class PageAdapter(
             if (v.pageIndex != page) return@doOnLayout
             holder.jobs[slot]?.cancel()
             holder.jobs[slot] = scope.launch {
-                val target = (v.renderWidth().coerceAtLeast(v.width) * renderScale).toInt()
+                val base = v.renderWidth().coerceAtLeast(v.width)
+                val target = (base * renderScale).toInt()
+                // First show a sharp image already made (memory / disk) if the one on screen is only
+                // a small preview, then render a sharper one if zoomed in.
+                val shown = v.bitmap
+                if (shown == null || shown.width < base * 0.9f) {
+                    val quick = try { doc.quick(page, base) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { null }
+                    if (quick != null && v.pageIndex == page) {
+                        v.bitmap = quick
+                        if (quick.width >= target * 0.9f) {
+                            prefetchAfter(page, target)
+                            return@launch
+                        }
+                    }
+                }
                 // Retry failed renders (e.g. memory pressure), at a lower resolution after the first tries.
                 var bmp: android.graphics.Bitmap? = null
                 var attempt = 0
@@ -182,7 +197,7 @@ class PageAdapter(
                 }
                 if (bmp != null && v.pageIndex == page) {
                     v.bitmap = bmp
-                    if (renderScale <= 1.01f) prefetchAfter(page, target)
+                    prefetchAfter(page, target)
                 }
             }
         }
