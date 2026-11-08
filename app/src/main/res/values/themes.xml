@@ -8,17 +8,17 @@
     </style>
 
     <style name="ToolButton">
-        <item name="android:layout_width">44dp</item>
-        <item name="android:layout_height">44dp</item>
+        <item name="android:layout_width">38dp</item>
+        <item name="android:layout_height">38dp</item>
         <item name="android:layout_marginEnd">4dp</item>
-        <item name="android:padding">10dp</item>
+        <item name="android:padding">8dp</item>
         <item name="android:scaleType">centerInside</item>
         <item name="android:background">@drawable/tool_btn_bg</item>
     </style>
 
     <style name="StepButton">
-        <item name="android:layout_width">36dp</item>
-        <item name="android:layout_height">36dp</item>
+        <item name="android:layout_width">34dp</item>
+        <item name="android:layout_height">34dp</item>
         <item name="android:gravity">center</item>
         <item name="android:textSize">22sp</item>
         <item name="android:textColor">#374151</item>
@@ -29,8 +29,17 @@
 
     <style name="ToolDivider">
         <item name="android:layout_width">1dp</item>
-        <item name="android:layout_height">28dp</item>
+        <item name="android:layout_height">24dp</item>
         <item name="android:layout_marginHorizontal">8dp</item>
         <item name="android:background">#D1D5DB</item>
+    </style>
+
+    <!-- Outlined button without the extra 48dp touch padding, so the tool bar stays thin. -->
+    <style name="CompactOutlinedButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">34dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:paddingTop">0dp</item>
+        <item name="android:paddingBottom">0dp</item>
     </style>
 </resources>

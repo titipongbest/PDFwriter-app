@@ -43,6 +43,14 @@ class SpreadView(context: Context) : ViewGroup(context) {
         var h = ((w - gaps) / sumInverse)
         val viewportH = MeasureSpec.getSize(heightMeasureSpec)
         if (fitViewport && viewportH > 0 && h > viewportH) h = viewportH.toFloat()
+        if (!fitViewport) {
+            // Vertical scrolling: fit the whole page on screen (e.g. a full A4 sheet); zoom in for more.
+            val list = parent as? View
+            if (list != null && list.height > 0) {
+                val room = list.height - list.paddingTop - list.paddingBottom - gap
+                if (room > 0 && h > room) h = room.toFloat()
+            }
+        }
         pageHeight = h.toInt().coerceAtLeast(1)
         for (i in 0 until count) {
             widths[i] = (h / pages[i].displayAspect.coerceAtLeast(0.01f)).toInt().coerceAtLeast(1)

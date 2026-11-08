@@ -9,7 +9,8 @@
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
+        android:layout_height="44dp"
+        android:minHeight="44dp"
         android:background="#FFFFFF">
 
         <!-- Save status, shown at the right of the top bar (before the action icons) -->
@@ -27,7 +28,7 @@
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/docTabs"
         android:layout_width="match_parent"
-        android:layout_height="40dp"
+        android:layout_height="32dp"
         android:background="#F1F5F9"
         android:visibility="gone"
         app:tabGravity="start"
@@ -51,12 +52,12 @@
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="8dp"
-            android:paddingVertical="6dp">
+            android:paddingVertical="2dp">
 
             <!-- Mode picker: tap for a list of modes (room for more later) -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnMode"
-                style="@style/Widget.Material3.Button.OutlinedButton"
+                style="@style/CompactOutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:minWidth="0dp"
@@ -154,14 +155,14 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnEraseStroke"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="@style/CompactOutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/erase_stroke" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnErasePixel"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="@style/CompactOutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/erase_pixel" />
@@ -187,7 +188,7 @@
                 android:id="@+id/tvSize"
                 android:layout_width="52dp"
                 android:layout_marginHorizontal="4dp"
-                android:layout_height="36dp"
+                android:layout_height="32dp"
                 android:background="@drawable/size_box_bg"
                 android:clickable="true"
                 android:contentDescription="@string/size_type"
@@ -304,7 +305,7 @@
             android:background="#E5E7EB"
             android:clipToPadding="false"
             android:paddingHorizontal="8dp"
-            android:paddingTop="12dp" />
+            android:paddingTop="6dp" />
 
         <LinearLayout
             android:id="@+id/emptyView"
@@ -462,7 +463,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnReadingExit"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="@style/CompactOutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
@@ -536,7 +537,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDeletePages"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="@style/CompactOutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:visibility="gone"
@@ -553,7 +554,7 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnEditPages"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    style="@style/CompactOutlinedButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="4dp"
