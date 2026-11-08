@@ -621,6 +621,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** Switches tool and shows that tool's own colors and size. */
     private fun selectTool(t: DrawTool) {
+        clearSelection() // a framed note / picture / stroke belongs to the previous tool
         currentTool = t
         toolOn = true
         toolButtons.forEach { (key, v) -> v.isSelected = key == t }
@@ -771,6 +772,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                     } else if (before is ImageNote && after is ImageNote) {
                         val i = pa.images.indexOf(after)
                         if (i >= 0) pa.images[i] = before
+                        i >= 0
+                    } else if (before is InkStroke && after is InkStroke) {
+                        val i = pa.strokes.indexOf(after)
+                        if (i >= 0) pa.strokes[i] = before
                         i >= 0
                     } else {
                         false
@@ -2328,12 +2333,32 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Keep it selected, menu above its new place.
         if (after is TextNote) onTextTapped(view, page, after)
         if (after is ImageNote) onImageTapped(view, page, after)
+        if (after is InkStroke) onStrokeTapped(view, page, after)
     }
 
     /** Undo record for a text note / picture that was moved, resized or edited. */
     private class NoteEdit(val before: Any, val after: Any)
 
     private var tappedImage: Pair<Int, ImageNote>? = null
+    private var tappedStroke: Pair<Int, InkStroke>? = null
+
+    override fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {
+        clearSelection()
+        tappedStroke = page to stroke
+        noteView = view
+        view.editingNote = stroke // dotted frame; a straight line gets end handles
+        binding.btnSelCopy.visibility = View.GONE
+        binding.btnSelHighlight.visibility = View.GONE
+        binding.btnSelUnderline.visibility = View.GONE
+        binding.btnNoteEdit.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.VISIBLE
+        binding.btnHlDelete.visibility = View.VISIBLE
+        val r = stroke.width / 2f
+        showBarAt(view, listOf(RectF(
+            stroke.points.minOf { it.x } - r, stroke.points.minOf { it.y } - r,
+            stroke.points.maxOf { it.x } + r, stroke.points.maxOf { it.y } + r
+        )))
+    }
 
     override fun onImageTapped(view: PdfPageView, page: Int, image: ImageNote) {
         clearSelection()
@@ -2436,6 +2461,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         tappedHighlight = null
         tappedNote = null
         tappedImage = null
+        tappedStroke = null
         barAnchor = null
         binding.btnNoteEdit.visibility = View.GONE
         binding.selectionBar.visibility = View.GONE
@@ -2468,6 +2494,21 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** Pick any color for a highlight / underline that's already on the page. */
     private fun recolorTappedMarkup() {
+        tappedStroke?.let { (page, stroke) ->
+            val view = noteView
+            ColorPicker.show(this, stroke.color) { picked ->
+                val list = pages[page]?.strokes ?: return@show
+                val i = list.indexOf(stroke)
+                if (i < 0) return@show
+                val recolored = InkStroke(stroke.points.toMutableList(), picked, stroke.width, stroke.highlighter)
+                list[i] = recolored
+                history.addLast(page to NoteEdit(stroke, recolored))
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+                markDirty()
+                if (view != null) onStrokeTapped(view, page, recolored)
+            }
+            return
+        }
         val (page, hl) = tappedHighlight ?: return
         ColorPicker.show(this, hl.color) { picked ->
             val list = pages[page]?.highlights ?: return@show
@@ -2564,6 +2605,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun deleteTappedHighlight() {
+        tappedStroke?.let { (page, stroke) ->
+            pages[page]?.strokes?.remove(stroke)
+            clearSelection()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+            return
+        }
         tappedImage?.let { (page, image) ->
             pages[page]?.images?.remove(image)
             clearSelection()

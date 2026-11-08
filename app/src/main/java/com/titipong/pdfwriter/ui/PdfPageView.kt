@@ -46,6 +46,8 @@ class PdfPageView(context: Context) : View(context) {
         /** Image tool: a tap on an existing picture, or on an empty spot (add a picture there). */
         fun onImageTapped(view: PdfPageView, page: Int, image: ImageNote) {}
         fun requestImage(page: Int, x: Float, y: Float) {}
+        /** Highlighter tool: a tap on an existing highlighter stroke. */
+        fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {}
         /** The selected text note is being dragged (hide popups), and was moved / resized. */
         fun onNoteDragStart() {}
         /** A tap away from the selected note: unselect it (instead of adding a new note). */
@@ -386,6 +388,14 @@ class PdfPageView(context: Context) : View(context) {
             val f = noteFrame(n) ?: return@let
             canvas.drawRect(f.left * s, f.top * s, f.right * s, f.bottom * s, frameDash)
             val hs = 5f * density
+            if (n is InkStroke) {
+                // Round handles at the ends of a straight line: drag to make it longer / shorter.
+                if (isLine(n)) for (p in n.points) {
+                    canvas.drawCircle(p.x * s, p.y * s, hs * 1.4f, handleFill)
+                    canvas.drawCircle(p.x * s, p.y * s, hs * 1.4f, handleStroke)
+                }
+                return@let
+            }
             for ((cx, cy) in corners(f)) {
                 canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleFill)
                 canvas.drawRect(cx * s - hs, cy * s - hs, cx * s + hs, cy * s + hs, handleStroke)
@@ -540,7 +550,7 @@ class PdfPageView(context: Context) : View(context) {
 
         // No tool selected: the pen scrolls the page like a finger (unless the side button is held).
         if (!h.toolActive && !eraserButton && mode == Mode.NONE) return false
-        if (!eraserButton && (h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE) && noteDrag(e, h)) return true
+        if (!eraserButton && h.tool in DRAGGABLE_TOOLS && noteDrag(e, h)) return true
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -570,7 +580,10 @@ class PdfPageView(context: Context) : View(context) {
                 when (mode) {
                     Mode.INK -> {
                         appendPoints(e)
-                        commitStroke(h)
+                        if (!highlighterTap(h)) {
+                            if (editingNote != null) h.onNoteDeselect()
+                            commitStroke(h)
+                        }
                     }
                     Mode.TEXT -> if (toNormalized(e.x, e.y)) {
                         if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
@@ -588,6 +601,7 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
+        if (h.tool == DrawTool.HIGHLIGHTER && h.toolActive) return onFingerHighlighter(e, h)
         val placing = h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE
         if (!placing || !h.toolActive) return false // let the list scroll
         if (noteDrag(e, h)) return true
@@ -608,6 +622,65 @@ class PdfPageView(context: Context) : View(context) {
 
     override fun performClick(): Boolean = super.performClick()
 
+    // ---------------------------------------------------------------- selecting highlighter strokes
+
+    /** Highlighter stroke under a normalized point (the topmost). */
+    private fun highlighterAt(x: Float, y: Float): InkStroke? = annotations?.strokes?.lastOrNull { st ->
+        st.highlighter && run {
+            val reach = st.width / 2f + 4f * density / pageScale.coerceAtLeast(1f)
+            val pts = st.points
+            pts.any { hypot(it.x - x, it.y - y) < reach } ||
+                (1 until pts.size).any { segDist(pts[it - 1], pts[it], x, y) < reach }
+        }
+    }
+
+    /**
+     * The highlighter "stroke" just drawn was only a tap: on an existing highlighter stroke it
+     * selects that stroke (no dot is added); with something selected it unselects it.
+     */
+    private fun highlighterTap(h: Host): Boolean {
+        val st = active ?: return false
+        if (!st.highlighter || st.points.isEmpty()) return false
+        val xs = st.points.map { it.x }
+        val ys = st.points.map { it.y }
+        if ((xs.max() - xs.min()) * pageScale > touchSlop || (ys.max() - ys.min()) * pageScale > touchSlop) return false
+        val p = st.points.first()
+        val hit = highlighterAt(p.x, p.y)
+        if (hit == null && editingNote == null) return false
+        active = null
+        if (hit != null) h.onStrokeTapped(this, pageIndex, hit) else h.onNoteDeselect()
+        return true
+    }
+
+    private var hlDownX = 0f
+    private var hlDownY = 0f
+
+    /** Finger with the highlighter tool (not drawing with fingers): taps select strokes, drags scroll. */
+    private fun onFingerHighlighter(e: MotionEvent, h: Host): Boolean {
+        if (noteDrag(e, h)) return true
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                hlDownX = e.x
+                hlDownY = e.y
+            }
+            MotionEvent.ACTION_UP -> {
+                if (hypot(e.x - hlDownX, e.y - hlDownY) < touchSlop && toNormalized(e.x, e.y)) {
+                    val hit = highlighterAt(pt[0], pt[1])
+                    if (hit != null) {
+                        performClick()
+                        h.onStrokeTapped(this, pageIndex, hit)
+                    } else if (editingNote != null) {
+                        h.onNoteDeselect()
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    /** A straight highlighter line (two points) can be lengthened / shortened from its ends. */
+    private fun isLine(st: InkStroke) = st.points.size == 2
+
     // ---------------------------------------------------------------- moving / resizing a text note
 
     /** 0 = none, 1 = move, 2..5 = resize from corner (top-left, top-right, bottom-right, bottom-left). */
@@ -619,6 +692,14 @@ class PdfPageView(context: Context) : View(context) {
 
     private fun noteFrame(item: Any): RectF? {
         if (item is ImageNote) return RectF(item.x, item.y, item.x + item.w, item.y + item.h)
+        if (item is InkStroke) {
+            if (item.points.isEmpty()) return null
+            val r = item.width / 2f
+            return RectF(
+                item.points.minOf { it.x } - r, item.points.minOf { it.y } - r,
+                item.points.maxOf { it.x } + r, item.points.maxOf { it.y } + r
+            )
+        }
         val n = item as? TextNote ?: return null
         val b = textBox(n)
         val pad = 4f * density / pageScale.coerceAtLeast(1f)
@@ -642,7 +723,14 @@ class PdfPageView(context: Context) : View(context) {
                 val f = noteFrame(note) ?: return false
                 val grab = 18f * density / pageScale.coerceAtLeast(1f)
                 val corner = corners(f).indexOfFirst { (cx, cy) -> hypot(cx - x, cy - y) < grab }
-                dragKind = when {
+                dragKind = if (note is InkStroke) {
+                    val end = if (isLine(note)) note.points.indexOfFirst { hypot(it.x - x, it.y - y) < grab } else -1
+                    when {
+                        end >= 0 -> 6 + end // 6 = first end, 7 = last end
+                        highlighterAt(x, y) === note -> 1
+                        else -> 0
+                    }
+                } else when {
                     corner >= 0 -> 2 + corner
                     RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y) -> 1
                     else -> 0
@@ -667,6 +755,9 @@ class PdfPageView(context: Context) : View(context) {
                     h.onNoteDragStart()
                 }
                 val updated: Any = when {
+                    orig is InkStroke && dragKind == 1 ->
+                        InkStroke(orig.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), orig.color, orig.width, orig.highlighter)
+                    orig is InkStroke && dragKind >= 6 -> stretched(orig, dragKind - 6, pt[0], pt[1])
                     dragKind == 1 && orig is TextNote -> TextNote(orig.text, orig.x + dx, orig.y + dy, orig.color, orig.size)
                     dragKind == 1 && orig is ImageNote -> ImageNote(orig.file, orig.x + dx, orig.y + dy, orig.w, orig.h)
                     else -> resized(orig, dragKind - 2, pt[0], pt[1]) ?: return true
@@ -686,6 +777,7 @@ class PdfPageView(context: Context) : View(context) {
                     performClick()
                     // A tap: show its menu again.
                     if (now is ImageNote) h.onImageTapped(this, pageIndex, now)
+                    else if (now is InkStroke) h.onStrokeTapped(this, pageIndex, now)
                     else if (now is TextNote) h.onTextTapped(this, pageIndex, now)
                 }
                 return true
@@ -697,6 +789,19 @@ class PdfPageView(context: Context) : View(context) {
             }
         }
         return dragKind != 0
+    }
+
+    /** A straight line with end [end] moved along the line's direction to (x, y)'s position on it. */
+    private fun stretched(orig: InkStroke, end: Int, x: Float, y: Float): InkStroke {
+        val fixed = orig.points[1 - end]
+        val moving = orig.points[end]
+        val len = hypot(moving.x - fixed.x, moving.y - fixed.y).coerceAtLeast(1e-5f)
+        val ux = (moving.x - fixed.x) / len
+        val uy = (moving.y - fixed.y) / len
+        val newLen = ((x - fixed.x) * ux + (y - fixed.y) * uy).coerceAtLeast(orig.width) // never flips
+        val p = StrokePoint(fixed.x + ux * newLen, fixed.y + uy * newLen, moving.pressure)
+        val pts = if (end == 0) mutableListOf(p, fixed) else mutableListOf(fixed, p)
+        return InkStroke(pts, orig.color, orig.width, orig.highlighter)
     }
 
     /** [orig] scaled so its frame's corner [corner] follows (x, y) while the opposite corner stays. */
@@ -734,6 +839,10 @@ class PdfPageView(context: Context) : View(context) {
             val i = a.images.indexOf(old)
             if (i < 0) return
             a.images[i] = new
+        } else if (old is InkStroke && new is InkStroke) {
+            val i = a.strokes.indexOf(old)
+            if (i < 0) return
+            a.strokes[i] = new
         } else {
             return
         }
@@ -915,6 +1024,7 @@ class PdfPageView(context: Context) : View(context) {
         // The eraser only removes pen / highlighter ink. Text notes and text highlights / underlines
         // are deleted by tapping them (text tool / view mode).
         if (strokesRemoved) {
+            (editingNote as? InkStroke)?.let { if (it !in a.strokes) h.onNoteDeselect() }
             inkDirty = true
             h.onItemsErased(pageIndex)
         }
@@ -1022,5 +1132,8 @@ class PdfPageView(context: Context) : View(context) {
         var penButtonOverride = false
 
         fun pressureScale(p: Float): Float = 0.4f + p.coerceIn(0f, 1f) * 1.2f
+
+        /** Tools whose items can be selected and dragged with a frame. */
+        private val DRAGGABLE_TOOLS = setOf(DrawTool.TEXT, DrawTool.IMAGE, DrawTool.HIGHLIGHTER)
     }
 }
