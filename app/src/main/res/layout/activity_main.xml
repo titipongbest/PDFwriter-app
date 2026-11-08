@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            app:popupTheme="@style/ThemeOverlay.AppCompat.Light" />
+
+        <!-- Tool strip -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="6dp"
+            android:gravity="center_vertical"
+            android:background="?attr/colorSurface">
+
+            <!-- Pen -->
+            <ImageButton
+                android:id="@+id/btnPen"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_pen"
+                android:background="@drawable/tool_btn_bg"
+                android:contentDescription="ปากกา"
+                android:padding="6dp"/>
+
+            <!-- Highlight -->
+            <ImageButton
+                android:id="@+id/btnHighlight"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_highlight"
+                android:background="@drawable/tool_btn_bg"
+                android:contentDescription="ไฮไลต์"
+                android:layout_marginStart="4dp"
+                android:padding="6dp"/>
+
+            <!-- Eraser -->
+            <ImageButton
+                android:id="@+id/btnEraser"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@drawable/ic_eraser"
+                android:background="@drawable/tool_btn_bg"
+                android:contentDescription="ยางลบ"
+                android:layout_marginStart="4dp"
+                android:padding="6dp"/>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:background="?attr/colorOutline"
+                android:layout_marginHorizontal="8dp"/>
+
+            <!-- Colors -->
+            <View android:id="@+id/color1" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+            <View android:id="@+id/color2" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+            <View android:id="@+id/color3" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+            <View android:id="@+id/color4" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+            <View android:id="@+id/color5" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+            <View android:id="@+id/color6" android:layout_width="22dp" android:layout_height="22dp"
+                android:background="@drawable/color_dot_bg" android:layout_marginEnd="4dp"/>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="1dp"
+                android:layout_height="28dp"
+                android:background="?attr/colorOutline"
+                android:layout_marginHorizontal="8dp"/>
+
+            <!-- Size -->
+            <SeekBar
+                android:id="@+id/seekSize"
+                android:layout_width="80dp"
+                android:layout_height="wrap_content"
+                android:max="9"
+                android:progress="2"/>
+            <TextView
+                android:id="@+id/tvSize"
+                android:layout_width="20dp"
+                android:layout_height="wrap_content"
+                android:text="3"
+                android:textSize="12sp"
+                android:layout_marginStart="4dp"/>
+
+            <View android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1"/>
+
+            <!-- Save state -->
+            <TextView
+                android:id="@+id/tvSaveState"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:textColor="?attr/colorPrimary"
+                android:layout_marginEnd="8dp"/>
+        </LinearLayout>
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <!-- PDF + Drawing overlay -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <com.github.barteksc.pdfviewer.PDFView
+            android:id="@+id/pdfView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"/>
+
+        <com.titipong.pdfwriter.ui.DrawingView
+            android:id="@+id/drawingView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/transparent"/>
+
+    </FrameLayout>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>
