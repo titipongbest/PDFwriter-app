@@ -373,10 +373,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             showViewModeDialog()
             true
         }
-        R.id.action_reset_zoom -> {
-            binding.recycler.resetZoom()
-            true
-        }
         R.id.action_clear -> {
             confirmClearPage()
             true
@@ -1821,6 +1817,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelUnderline.setOnClickListener { markupSelection(underline = true) }
         binding.btnHlRecolor.setOnClickListener { recolorTappedMarkup() }
         binding.btnHlDelete.setOnClickListener { deleteTappedHighlight() }
+        binding.btnNoteEdit.setOnClickListener { editTappedNote() }
         binding.btnSelClose.setOnClickListener { clearSelection() }
         showModeTools()
     }
@@ -1965,6 +1962,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelHighlight.visibility = View.GONE
         binding.btnSelUnderline.visibility = View.GONE
         binding.btnHlRecolor.visibility = View.GONE
+        binding.btnNoteEdit.visibility = View.VISIBLE
         binding.btnHlDelete.visibility = View.VISIBLE
         showBarAt(view, listOf(view.textBox(note)))
     }
@@ -2068,6 +2066,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         tappedHighlight = null
         tappedNote = null
         barAnchor = null
+        binding.btnNoteEdit.visibility = View.GONE
         binding.selectionBar.visibility = View.GONE
     }
 
@@ -2108,6 +2107,87 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
             markDirty()
         }
+    }
+
+    /** Edit a text note: its words, color and size. */
+    private fun editTappedNote() {
+        val (page, note) = tappedNote ?: return
+        clearSelection()
+        var color = note.color
+        // Same 0.1–10.0 scale as the text tool's size.
+        var tenths = Math.round((note.size - 0.018f) / 0.004f * 10f).coerceIn(1, 100)
+        fun sizeOf(t: Int) = 0.018f + 0.004f * (t / 10f)
+
+        val pad = (20 * density).toInt()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val input = EditText(this).apply {
+            setText(note.text)
+            setSelection(note.text.length)
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+        }
+        root.addView(input)
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, pad / 2, 0, 0)
+        }
+        val swatch = View(this)
+        fun paintSwatch() {
+            swatch.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(color)
+                setStroke((1 * density).toInt(), Color.parseColor("#33000000"))
+            }
+        }
+        paintSwatch()
+        swatch.contentDescription = getString(R.string.change_color)
+        swatch.setOnClickListener {
+            ColorPicker.show(this, color) { picked ->
+                color = picked
+                paintSwatch()
+            }
+        }
+        val d = (36 * density).toInt()
+        row.addView(swatch, LinearLayout.LayoutParams(d, d).apply { marginEnd = pad / 2 })
+        val label = android.widget.TextView(this).apply {
+            text = getString(R.string.text_size_value, String.format(Locale.US, "%.1f", tenths / 10f))
+            minWidth = (80 * density).toInt()
+        }
+        row.addView(label)
+        val seek = SeekBar(this).apply {
+            max = 99
+            progress = tenths - 1
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    tenths = progress + 1
+                    label.text = getString(R.string.text_size_value, String.format(Locale.US, "%.1f", tenths / 10f))
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            })
+        }
+        row.addView(seek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(row)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.edit_text_title)
+            .setView(root)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val text = input.text.toString().trim()
+                val list = pages[page]?.texts ?: return@setPositiveButton
+                val i = list.indexOf(note)
+                if (i < 0 || text.isEmpty()) return@setPositiveButton
+                list[i] = TextNote(text, note.x, note.y, color, sizeOf(tenths))
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+                markDirty()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun deleteTappedHighlight() {

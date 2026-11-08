@@ -367,6 +367,15 @@
                 app:icon="@drawable/ic_palette" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnNoteEdit"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/edit"
+                android:visibility="gone"
+                app:icon="@drawable/ic_pen" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnHlDelete"
                 style="@style/Widget.Material3.Button.TextButton"
                 android:layout_width="wrap_content"

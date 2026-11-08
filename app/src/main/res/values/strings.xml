@@ -174,4 +174,7 @@
     <string name="about">เกี่ยวกับ PDFWriter</string>
     <string name="credit_line">PDFWriter v%1$s · by NorthXbar</string>
     <string name="about_message">เวอร์ชัน %1$s\n\nby NorthXbar</string>
+    <string name="edit">แก้ไข</string>
+    <string name="edit_text_title">แก้ไขข้อความ</string>
+    <string name="text_size_value">ขนาด %1$s</string>
 </resources>
