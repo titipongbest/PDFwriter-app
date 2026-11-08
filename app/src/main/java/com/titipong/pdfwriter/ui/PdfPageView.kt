@@ -41,7 +41,7 @@ class PdfPageView(context: Context) : View(context) {
         /** false = no tool selected: the S Pen scrolls like a finger (side button still erases). */
         val toolActive: Boolean get() = true
         /** A tap on an existing text note with the text tool. */
-        fun onTextTapped(page: Int, note: TextNote) {}
+        fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {}
         /** Eraser size (its own setting; also used for the S Pen side button). */
         val eraserWidth: Float get() = strokeWidth
         fun annotationsFor(page: Int): PageAnnotations
@@ -254,6 +254,23 @@ class PdfPageView(context: Context) : View(context) {
         }
         toView.invert(toPage)
         matrixDirty = false
+    }
+
+    /** Where a normalized page point ends up in this view. */
+    fun viewPointOf(nx: Float, ny: Float): android.graphics.PointF {
+        ensureMatrix()
+        pt[0] = nx * pageScale
+        pt[1] = ny * pageScale
+        toView.mapPoints(pt)
+        return android.graphics.PointF(pt[0], pt[1])
+    }
+
+    /** Text notes as normalized boxes (for placing a popup over one). */
+    fun textBox(note: TextNote): RectF {
+        val s = pageScale.coerceAtLeast(1f)
+        textPaint.textSize = note.size * s
+        val w = textPaint.measureText(note.text) / s
+        return RectF(note.x, note.y - note.size, note.x + w, note.y + note.size * 0.3f)
     }
 
     /** Where a normalized page point ends up in this view (y), e.g. to scroll a search match into view. */
@@ -515,7 +532,7 @@ class PdfPageView(context: Context) : View(context) {
     /** Text tool tap: on an existing note -> offer to delete it; elsewhere -> add a note. */
     private fun textTap(h: Host, nx: Float, ny: Float) {
         val hit = textAt(nx, ny)
-        if (hit != null) h.onTextTapped(pageIndex, hit) else h.requestText(pageIndex, nx, ny)
+        if (hit != null) h.onTextTapped(this, pageIndex, hit) else h.requestText(pageIndex, nx, ny)
     }
 
     private fun textAt(nx: Float, ny: Float): TextNote? {

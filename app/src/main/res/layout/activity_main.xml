@@ -261,6 +261,7 @@
     </LinearLayout>
 
     <View
+        android:id="@+id/chromeDivider"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="#E5E7EB" />
@@ -317,8 +318,7 @@
             android:id="@+id/selectionBar"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="top|center_horizontal"
-            android:layout_marginTop="12dp"
+            android:layout_gravity="top|start"
             android:background="@drawable/selection_bar_bg"
             android:elevation="6dp"
             android:gravity="center_vertical"

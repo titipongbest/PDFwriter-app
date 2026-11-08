@@ -259,6 +259,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
                 updatePageIndicator()
+                if (barAnchor != null) positionBar()
             }
         })
         binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
@@ -583,6 +584,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun onZoomSettled(scale: Float) {
+        if (barAnchor != null) binding.recycler.post { positionBar() }
         val a = adapter ?: return
         a.renderScale = scale
         val lm = binding.recycler.layoutManager as? LinearLayoutManager ?: return
@@ -1809,6 +1811,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun setInteraction(view: Boolean) {
+        binding.recycler.removeCallbacks(toggleChrome)
+        if (!view && chromeHidden) setChromeHidden(false)
         interactionView = view
         prefs.edit().putBoolean(PREF_INTERACTION_VIEW, view).apply()
         clearSelection()
@@ -1894,11 +1898,24 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelUnderline.visibility = View.VISIBLE
         binding.btnHlRecolor.visibility = View.GONE
         binding.btnHlDelete.visibility = View.GONE
-        binding.selectionBar.visibility = View.VISIBLE
+        val idx = searchIndex ?: return
+        showBarAt(view, idx.rangeRects(selPage, a, b))
     }
 
     override fun viewTap(view: PdfPageView, page: Int, nx: Float, ny: Float) {
+        val hadPopup = binding.selectionBar.visibility == View.VISIBLE
         clearSelection()
+        val padHit = 0.004f
+        val onMarkup = pages[page]?.highlights?.any { h ->
+            h.rects.any { r -> nx >= r.left - padHit && nx <= r.right + padHit && ny >= r.top - padHit && ny <= r.bottom + padHit }
+        } == true
+        if (!onMarkup) {
+            if (hadPopup) return // the tap just dismissed the popup
+            // Wait to see if it's a double tap (zoom) before hiding / showing the menus.
+            if (binding.recycler.removeCallbacks(toggleChrome)) return
+            binding.recycler.postDelayed(toggleChrome, android.view.ViewConfiguration.getDoubleTapTimeout().toLong())
+            return
+        }
         val pad = 0.004f
         val hl = pages[page]?.highlights?.lastOrNull { h ->
             h.rects.any { r -> nx >= r.left - pad && nx <= r.right + pad && ny >= r.top - pad && ny <= r.bottom + pad }
@@ -1909,10 +1926,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelUnderline.visibility = View.GONE
         binding.btnHlRecolor.visibility = View.VISIBLE
         binding.btnHlDelete.visibility = View.VISIBLE
-        binding.selectionBar.visibility = View.VISIBLE
+        showBarAt(view, hl.rects)
     }
 
-    override fun onTextTapped(page: Int, note: TextNote) {
+    override fun onTextTapped(view: PdfPageView, page: Int, note: TextNote) {
         clearSelection()
         tappedNote = page to note
         binding.btnSelCopy.visibility = View.GONE
@@ -1920,8 +1937,83 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelUnderline.visibility = View.GONE
         binding.btnHlRecolor.visibility = View.GONE
         binding.btnHlDelete.visibility = View.VISIBLE
-        binding.selectionBar.visibility = View.VISIBLE
+        showBarAt(view, listOf(view.textBox(note)))
     }
+
+    // ---------------------------------------------------------------- popup bar placement
+
+    /** What the floating bar is attached to: a page view and normalized boxes on it. */
+    private var barAnchor: Pair<PdfPageView, List<RectF>>? = null
+
+    private fun showBarAt(view: PdfPageView, rects: List<RectF>) {
+        barAnchor = view to rects
+        val bar = binding.selectionBar
+        bar.visibility = View.VISIBLE
+        bar.alpha = 0f // invisible until placed (its size is known after layout)
+        bar.post { positionBar() }
+    }
+
+    /** Puts the bar just above the anchored text (or below it, if there's no room above). */
+    private fun positionBar() {
+        val bar = binding.selectionBar
+        val (view, rects) = barAnchor ?: return
+        if (bar.visibility != View.VISIBLE || rects.isEmpty() || !view.isAttachedToWindow) return
+        val rv = binding.recycler
+        val offset = android.graphics.Rect()
+        try {
+            rv.offsetDescendantRectToMyCoords(view, offset)
+        } catch (e: IllegalArgumentException) {
+            return // the page view was recycled
+        }
+        var top = Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
+        var left = Float.MAX_VALUE
+        var right = -Float.MAX_VALUE
+        for (r in rects) {
+            for ((nx, ny) in listOf(r.left to r.top, r.right to r.top, r.left to r.bottom, r.right to r.bottom)) {
+                val p = view.viewPointOf(nx, ny)
+                val sp = rv.toScreen(offset.left + p.x, offset.top + p.y)
+                top = minOf(top, sp.y); bottom = maxOf(bottom, sp.y)
+                left = minOf(left, sp.x); right = maxOf(right, sp.x)
+            }
+        }
+        val margin = 8 * density
+        val parentW = (bar.parent as View).width.toFloat()
+        val parentH = (bar.parent as View).height.toFloat()
+        val x = ((left + right) / 2f - bar.width / 2f).coerceIn(margin, (parentW - bar.width - margin).coerceAtLeast(margin))
+        var y = top - bar.height - margin
+        if (y < margin) y = bottom + margin
+        y = y.coerceIn(margin, (parentH - bar.height - margin).coerceAtLeast(margin))
+        bar.translationX = x
+        bar.translationY = y
+        bar.alpha = 1f
+    }
+
+    // ---------------------------------------------------------------- view mode: tap to hide menus
+
+    private var chromeHidden = false
+    private val toggleChrome = Runnable { setChromeHidden(!chromeHidden) }
+
+    /** Hides / shows the top bar, tabs, tool strip and the system bars (view mode, single tap). */
+    private fun setChromeHidden(hidden: Boolean) {
+        chromeHidden = hidden
+        val v = if (hidden) View.GONE else View.VISIBLE
+        binding.toolbar.visibility = v
+        binding.toolStrip.visibility = v
+        binding.chromeDivider.visibility = v
+        binding.docTabs.visibility = if (hidden || tabs.isEmpty()) View.GONE else View.VISIBLE
+        if (hidden && binding.searchBar.visibility == View.VISIBLE) closeSearch()
+        val ctl = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        if (hidden) {
+            ctl.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            ctl.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            ctl.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    private fun selectionRange(): Pair<Int, Int> =
 
     private fun selectionRange(): Pair<Int, Int> =
         if (selFocus >= selAnchorStart) selAnchorStart to maxOf(selAnchorEnd, selFocus)
@@ -1940,6 +2032,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         selPage = -1
         tappedHighlight = null
         tappedNote = null
+        barAnchor = null
         binding.selectionBar.visibility = View.GONE
     }
 

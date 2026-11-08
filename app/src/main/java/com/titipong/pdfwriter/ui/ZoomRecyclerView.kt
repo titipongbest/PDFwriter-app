@@ -103,6 +103,10 @@ class ZoomRecyclerView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** Unzoomed list coordinates -> where they appear on screen (relative to this view). */
+    fun toScreen(x: Float, y: Float): android.graphics.PointF =
+        android.graphics.PointF(tx + x * scale, ty + y * scale)
+
     fun resetZoom() {
         zoomTo(1f, 0f, 0f)
         onZoomSettled?.invoke(scale)
