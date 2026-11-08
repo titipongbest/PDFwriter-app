@@ -1,0 +1,9 @@
+name: probe
+on:
+  push:
+    branches: [probe]
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -sS https://maven.ghostscript.com/com/artifex/mupdf/fitz/maven-metadata.xml
