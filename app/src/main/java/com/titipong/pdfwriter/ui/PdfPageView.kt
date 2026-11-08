@@ -45,6 +45,8 @@ class PdfPageView(context: Context) : View(context) {
         /** Settings: smooth pen strokes; straighten free-highlighter strokes. */
         val inkSmoothing: Boolean get() = false
         val highlighterStraighten: Boolean get() = false
+        /** Setting: one finger draws like the pen (two fingers scroll / zoom). */
+        val fingerDraw: Boolean get() = false
         /** true = erase only the touched part of strokes; false = erase whole strokes. */
         val eraserPixelMode: Boolean get() = false
         /** Eraser size (its own setting; also used for the S Pen side button). */
@@ -478,9 +480,11 @@ class PdfPageView(context: Context) : View(context) {
         if (h.viewMode) return onViewTouch(e, h)
         val toolType = e.getToolType(0)
         val isPen = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
-        if (!isPen) return onFinger(e, h)
+        // "Draw with Finger": a finger writes like the pen while a tool is selected.
+        val fingerPen = !isPen && h.fingerDraw && h.toolActive && toolType == MotionEvent.TOOL_TYPE_FINGER
+        if (!isPen && !fingerPen) return onFinger(e, h)
 
-        val eraserButton = penButtonOverride ||
+        val eraserButton = !fingerPen && penButtonOverride ||
             toolType == MotionEvent.TOOL_TYPE_ERASER ||
             (e.buttonState and (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_STYLUS_SECONDARY)) != 0
 

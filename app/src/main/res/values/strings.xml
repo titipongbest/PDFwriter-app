@@ -186,5 +186,7 @@
     <string name="set_ink_smoothing">Ink Smoothing</string>
     <string name="set_ink_smoothing_desc">When enabled, ink strokes are smoothed.</string>
     <string name="set_hl_smoothing">Free Highlighter Smoothing</string>
+    <string name="set_finger_draw">Draw with Finger</string>
+    <string name="set_finger_draw_desc">When enabled, one finger writes with the selected tool. Scroll and zoom with two fingers.</string>
     <string name="set_hl_smoothing_desc">When enabled, free highlighter is automatically turned into straight line when appropriate.</string>
 </resources>

@@ -34,6 +34,12 @@ class ZoomRecyclerView @JvmOverloads constructor(
     private var ty = 0f
     private val inverse = Matrix()
 
+    /**
+     * True while one finger draws ("Draw with Finger" with a tool selected): then only two fingers
+     * scroll / zoom, and one finger neither pans nor double-tap zooms.
+     */
+    var fingerDrawing: () -> Boolean = { false }
+
     /** A confirmed single finger tap (not part of a double tap), anywhere on the list. */
     var onSingleTap: (() -> Unit)? = null
 
@@ -195,6 +201,50 @@ class ZoomRecyclerView @JvmOverloads constructor(
         canvas.restore()
     }
 
+    private var panFocusX = Float.NaN
+    private var panFocusY = Float.NaN
+
+    /**
+     * Two fingers moving together scroll the pages, even when held too close together for the
+     * pinch detector to start (it then handles both zoom and movement itself).
+     */
+    private fun twoFingerPan(ev: MotionEvent) {
+        val action = ev.actionMasked
+        val skip = if (action == MotionEvent.ACTION_POINTER_UP) ev.actionIndex else -1
+        var sx = 0f
+        var sy = 0f
+        var n = 0
+        for (i in 0 until ev.pointerCount) {
+            if (i == skip) continue
+            sx += ev.getX(i)
+            sy += ev.getY(i)
+            n++
+        }
+        if (n < 2 || action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            panFocusX = Float.NaN
+            return
+        }
+        val fx = sx / n
+        val fy = sy / n
+        if (action == MotionEvent.ACTION_MOVE && !panFocusX.isNaN() && !scaleDetector.isInProgress) {
+            val dx = fx - panFocusX
+            val dy = fy - panFocusY
+            if (horizontalPaging) {
+                ty += dy
+                scrollBy((-dx / scale).roundToInt(), 0)
+            } else {
+                tx += dx
+                scrollBy(0, (-dy / scale).roundToInt())
+            }
+            clampPan()
+            updateMatrix()
+            invalidate()
+        }
+        // Pointer added/removed: restart from the new focus so the page doesn't jump.
+        panFocusX = fx
+        panFocusY = fy
+    }
+
     private fun allFingers(ev: MotionEvent): Boolean {
         for (i in 0 until ev.pointerCount) {
             if (ev.getToolType(i) != MotionEvent.TOOL_TYPE_FINGER) return false
@@ -204,9 +254,10 @@ class ZoomRecyclerView @JvmOverloads constructor(
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val fingers = allFingers(ev)
+        val drawing = fingers && fingerDrawing()
         if (fingers) {
             scaleDetector.onTouchEvent(ev)
-            tapDetector.onTouchEvent(ev)
+            if (!drawing) tapDetector.onTouchEvent(ev)
         }
         val action = ev.actionMasked
 
@@ -214,6 +265,7 @@ class ZoomRecyclerView @JvmOverloads constructor(
         if (fingers && action == MotionEvent.ACTION_POINTER_DOWN && ev.pointerCount >= 2) blocking = true
 
         if (blocking) {
+            twoFingerPan(ev)
             if (!cancelSent) {
                 val cancel = MotionEvent.obtain(ev)
                 cancel.action = MotionEvent.ACTION_CANCEL
@@ -230,7 +282,7 @@ class ZoomRecyclerView @JvmOverloads constructor(
         }
 
         // One-finger pan across the scroll direction while zoomed (along it is the list's own scrolling).
-        if (fingers && ev.pointerCount == 1 && scale > 1f) {
+        if (fingers && !drawing && ev.pointerCount == 1 && scale > 1f) {
             when (action) {
                 MotionEvent.ACTION_DOWN -> {
                     lastPanX = ev.x

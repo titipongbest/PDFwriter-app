@@ -113,6 +113,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override val inkSmoothing: Boolean get() = SettingsDialog.isOn(prefs, SettingsDialog.INK_SMOOTHING)
     override val highlighterStraighten: Boolean
         get() = SettingsDialog.isOn(prefs, SettingsDialog.HIGHLIGHTER_STRAIGHTEN)
+    override val fingerDraw: Boolean get() = SettingsDialog.isOn(prefs, SettingsDialog.FINGER_DRAW)
     override val eraserPixelMode: Boolean get() = eraserPixel
     private var tappedNote: Pair<Int, TextNote>? = null
     override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
@@ -280,6 +281,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         })
         binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
         binding.recycler.onSingleTap = { onPageSingleTap() }
+        binding.recycler.fingerDrawing = { fingerDraw && !interactionView && toolActive }
         binding.pageScrubber.onScrub = { page, _ -> scrubToPage(page) }
         binding.btnOpenEmpty.setOnClickListener { launchPicker() }
         binding.tvCredit.text = getString(R.string.credit_line, appVersion())

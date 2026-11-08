@@ -17,12 +17,14 @@ object SettingsDialog {
 
     const val INK_SMOOTHING = "set_ink_smoothing"
     const val HIGHLIGHTER_STRAIGHTEN = "set_hl_smoothing"
+    const val FINGER_DRAW = "set_finger_draw"
 
     private class Row(val key: String, val title: Int, val description: Int, val default: Boolean)
 
     private val rows = listOf(
         Row(INK_SMOOTHING, R.string.set_ink_smoothing, R.string.set_ink_smoothing_desc, true),
-        Row(HIGHLIGHTER_STRAIGHTEN, R.string.set_hl_smoothing, R.string.set_hl_smoothing_desc, true)
+        Row(HIGHLIGHTER_STRAIGHTEN, R.string.set_hl_smoothing, R.string.set_hl_smoothing_desc, true),
+        Row(FINGER_DRAW, R.string.set_finger_draw, R.string.set_finger_draw_desc, false)
     )
 
     fun isOn(prefs: SharedPreferences, key: String): Boolean =
