@@ -311,6 +311,14 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="20dp"
                 android:text="@string/open_pdf" />
+
+            <TextView
+                android:id="@+id/tvCredit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="48dp"
+                android:textColor="#94A3B8"
+                android:textSize="12sp" />
         </LinearLayout>
 
         <!-- Text selection actions (view mode) -->

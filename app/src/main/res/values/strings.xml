@@ -171,4 +171,7 @@
     <string name="size_invalid">ใส่ตัวเลข 0.1 ถึง 10.0</string>
     <string name="close_tab">ปิดแท็บ</string>
     <string name="selected_pages_n">%1$d หน้าที่เลือก</string>
+    <string name="about">เกี่ยวกับ PDFWriter</string>
+    <string name="credit_line">PDFWriter v%1$s · by NorthXbar</string>
+    <string name="about_message">เวอร์ชัน %1$s\n\nby NorthXbar</string>
 </resources>

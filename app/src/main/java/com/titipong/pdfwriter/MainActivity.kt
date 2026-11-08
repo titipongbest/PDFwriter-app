@@ -264,6 +264,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         })
         binding.recycler.onZoomSettled = { scale -> onZoomSettled(scale) }
         binding.btnOpenEmpty.setOnClickListener { launchPicker() }
+        binding.tvCredit.text = getString(R.string.credit_line, appVersion())
 
         loadToolPrefs()
         setupTools()
@@ -339,6 +340,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             showExportDialog()
             true
         }
+        R.id.action_about -> {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.app_name)
+                .setMessage(getString(R.string.about_message, appVersion()))
+                .setPositiveButton(R.string.ok, null)
+                .show()
+            true
+        }
         R.id.action_pages -> {
             openPanel(bookmarksTab = false)
             true
@@ -372,6 +381,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             true
         }
         else -> super.onOptionsItemSelected(item)
+    }
+
+    /** versionName from the installed package (always matches the build). */
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (e: Exception) {
+        "?"
     }
 
     // ================================================================ tools
