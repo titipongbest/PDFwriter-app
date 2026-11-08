@@ -30,6 +30,7 @@
     <string name="save_failed">Couldn\'t save</string>
     <string name="save_pdf_failed">Couldn\'t save to PDF (your ink is kept in the app)</string>
     <string name="loading">Opening…</string>
+    <string name="page_loading">Loading…</string>
     <string name="export">Export…</string>
     <string name="export_done">PDF copy saved</string>
     <string name="reset_zoom">Reset zoom</string>

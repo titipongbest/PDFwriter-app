@@ -2852,10 +2852,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         loadHandler.post(loadTick)
     }
 
-    /**
-     * Shows how far the page being read is from being sharp. The platform renderer reports no
-     * progress, so the bar follows the time this page (or pages like it) took to render before.
-     */
+    /** Shows "Loading…" in the top bar while the page being read isn't sharp yet. */
     private fun updateLoadProgress() {
         loadHandler.removeCallbacks(loadTick)
         val doc = document
@@ -2884,10 +2881,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (sharp) {
             loadWasSharp = true
             if (binding.loadBox.visibility == View.VISIBLE) {
-                binding.loadBar.setProgressCompat(100, true)
-                binding.loadPct.text = "100%"
                 loadHandler.removeCallbacks(loadHide)
-                loadHandler.postDelayed(loadHide, 300)
+                loadHandler.postDelayed(loadHide, 150)
             }
             return
         }
@@ -2896,21 +2891,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             loadWasSharp = false
             loadStart = now
         }
-        val elapsed = now - loadStart
-        if (elapsed < 150) {
-            // Fast loads (memory / saved image) don't flash a bar.
-            loadHandler.postDelayed(loadTick, 50)
-            return
-        }
-        val est = doc.estimateMs(page, target).coerceAtLeast(200L)
-        val pct = ((1.0 - Math.exp(-2.0 * elapsed / est)) * 95).toInt().coerceIn(1, 95)
-        loadHandler.removeCallbacks(loadHide)
-        if (binding.loadBox.visibility != View.VISIBLE) {
-            binding.loadBar.setProgressCompat(0, false)
+        // Fast loads (memory / saved image) don't flash the indicator.
+        if (now - loadStart >= 150) {
+            loadHandler.removeCallbacks(loadHide)
             binding.loadBox.visibility = View.VISIBLE
         }
-        binding.loadBar.setProgressCompat(pct, true)
-        binding.loadPct.text = "$pct%"
         loadHandler.postDelayed(loadTick, 80)
     }
 

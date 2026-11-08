@@ -24,7 +24,7 @@
             android:textColor="#16A34A"
             android:textSize="12sp" />
 
-        <!-- Loading progress of the page being read, right after the file name -->
+        <!-- Shown while the page being read is still loading, right after the file name -->
         <LinearLayout
             android:id="@+id/loadBox"
             android:layout_width="wrap_content"
@@ -37,9 +37,9 @@
 
             <com.google.android.material.progressindicator.LinearProgressIndicator
                 android:id="@+id/loadBar"
-                android:layout_width="64dp"
+                android:layout_width="48dp"
                 android:layout_height="wrap_content"
-                android:max="100"
+                android:indeterminate="true"
                 app:indicatorColor="#2563EB"
                 app:trackColor="#DBEAFE"
                 app:trackCornerRadius="2dp"
@@ -51,6 +51,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="6dp"
                 android:maxLines="1"
+                android:text="@string/page_loading"
                 android:textColor="#64748B"
                 android:textSize="11sp" />
         </LinearLayout>
