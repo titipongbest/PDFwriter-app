@@ -2732,10 +2732,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             crops = crops,
             look = viewSettings.look()
         )
-        val lm = LinearLayoutManager(
+        val lm = com.titipong.pdfwriter.ui.PageLayoutManager(
             this,
-            if (viewSettings.vertical) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL,
-            false
+            if (viewSettings.vertical) RecyclerView.VERTICAL else RecyclerView.HORIZONTAL
         )
         clearSelection()
         binding.recycler.adapter = null
