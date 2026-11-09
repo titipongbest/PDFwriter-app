@@ -415,7 +415,6 @@ class PdfPageView(context: Context) : View(context) {
             val f = noteFrame(n) ?: return@let
             canvas.drawRect(f.left * s, f.top * s, f.right * s, f.bottom * s, frameDash)
             val hs = 5f * density
-            if (n is ItemGroup) return@let // moved as a whole: frame only
             if (n is InkStroke) {
                 // Round handles at the ends of a straight line: drag to make it longer / shorter.
                 if (isLine(n)) for (p in n.points) {
@@ -964,7 +963,11 @@ class PdfPageView(context: Context) : View(context) {
                 val grab = 18f * density / pageScale.coerceAtLeast(1f)
                 val corner = corners(f).indexOfFirst { (cx, cy) -> hypot(cx - x, cy - y) < grab }
                 dragKind = if (note is ItemGroup) {
-                    if (RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y)) 1 else 0
+                    when {
+                        corner >= 0 -> 2 + corner // resize everything together
+                        RectF(f).apply { inset(-grab / 3, -grab / 3) }.contains(x, y) -> 1
+                        else -> 0
+                    }
                 } else if (note is InkStroke) {
                     val end = if (isLine(note)) note.points.indexOfFirst { hypot(it.x - x, it.y - y) < grab } else -1
                     when {
@@ -1007,7 +1010,8 @@ class PdfPageView(context: Context) : View(context) {
                     pt[1] = sy
                 }
                 var updated: Any = when {
-                    orig is ItemGroup -> shifted(orig, dx, dy)
+                    orig is ItemGroup && dragKind == 1 -> shifted(orig, dx, dy)
+                    orig is ItemGroup -> scaledGroup(orig, dragKind - 2, pt[0], pt[1]) ?: return true
                     orig is TextNote && (dragKind == 8 || dragKind == 9) -> widened(orig, dragKind == 8, pt[0])
                     orig is InkStroke && dragKind == 1 ->
                         InkStroke(orig.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), orig.color, orig.width, orig.highlighter)
@@ -1143,6 +1147,35 @@ class PdfPageView(context: Context) : View(context) {
         sx?.let { guidesX += it.second }
         sy?.let { guidesY += it.second }
         return (sx?.second ?: x) to (sy?.second ?: y)
+    }
+
+    /**
+     * A lasso selection scaled from corner [corner] of its frame to (x, y), the opposite corner
+     * staying put: ink (and its thickness), text boxes (text size, width) and pictures all scale.
+     */
+    private fun scaledGroup(g: ItemGroup, corner: Int, x: Float, y: Float): ItemGroup? {
+        val f = noteFrame(g) ?: return null
+        val (ax, ay) = corners(f)[(corner + 2) % 4]
+        val k = maxOf(
+            kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f),
+            kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)
+        ).coerceIn(0.1f, 10f)
+        fun sx(v: Float) = ax + (v - ax) * k
+        fun sy(v: Float) = ay + (v - ay) * k
+        return ItemGroup(g.items.map {
+            when (it) {
+                is InkStroke -> InkStroke(
+                    it.points.map { p -> StrokePoint(sx(p.x), sy(p.y), p.pressure) }.toMutableList(),
+                    it.color, (it.width * k).coerceIn(0.0005f, 0.2f), it.highlighter
+                )
+                is TextNote -> it.copy(
+                    x = sx(it.x), y = sy(it.y), size = (it.size * k).coerceIn(0.004f, 0.4f),
+                    width = if (it.width > 0f) it.width * k else 0f
+                )
+                is ImageNote -> ImageNote(it.file, sx(it.x), sy(it.y), it.w * k, it.h * k)
+                else -> it
+            }
+        })
     }
 
     /** A straight line with end [end] moved along the line's direction to (x, y)'s position on it. */
