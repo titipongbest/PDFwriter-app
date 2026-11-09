@@ -211,6 +211,31 @@
                     android:text="@string/erase_pixel" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
+            <!-- Pen: line width with pressure, or even -->
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/pressureGroup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:visibility="gone"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnPressureOn"
+                    style="@style/CompactOutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pressure_on" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnPressureOff"
+                    style="@style/CompactOutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pressure_off" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
             <!-- Write to text: handwriting language -->
             <com.google.android.material.button.MaterialButtonToggleGroup
                 android:id="@+id/inkLangGroup"

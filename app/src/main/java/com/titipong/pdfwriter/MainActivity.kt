@@ -120,6 +120,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         get() = SettingsDialog.isOn(prefs, SettingsDialog.HIGHLIGHTER_STRAIGHTEN)
     override val fingerDraw: Boolean get() = SettingsDialog.isOn(prefs, SettingsDialog.FINGER_DRAW)
     override val eraserPixelMode: Boolean get() = eraserPixel
+    override val penPressure: Boolean get() = prefs.getBoolean(PREF_PEN_PRESSURE, true)
     private var tappedNote: Pair<Int, TextNote>? = null
     override val color: Int get() = palette.getOrNull(colorIndex) ?: Color.BLACK
     override val strokeWidth: Float get() = widthFor(sizeTenths)
@@ -590,6 +591,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.tvSize.setOnClickListener { promptSize() }
         binding.btnViewUndo.setOnClickListener { undoLast() }
         eraserPixel = prefs.getBoolean(PREF_ERASER_PIXEL, false)
+        binding.pressureGroup.check(if (penPressure) R.id.btnPressureOn else R.id.btnPressureOff)
+        binding.pressureGroup.addOnButtonCheckedListener { _, id, checked ->
+            if (checked) prefs.edit().putBoolean(PREF_PEN_PRESSURE, id == R.id.btnPressureOn).apply()
+        }
         binding.inkLangGroup.check(if (handwritingLang == "en") R.id.btnLangEn else R.id.btnLangTh)
         binding.inkLangGroup.addOnButtonCheckedListener { _, id, checked ->
             if (checked) {
@@ -670,6 +675,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         // Pictures have no color or size: resize them with their frame.
+        binding.pressureGroup.visibility = if (t == DrawTool.PEN) View.VISIBLE else View.GONE
         // Handwriting language for "To text" (lasso handwriting with the Select tool).
         binding.inkLangGroup.visibility = if (t == DrawTool.SELECT) View.VISIBLE else View.GONE
         val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT || t == DrawTool.WRITE_TEXT) View.GONE else View.VISIBLE
@@ -720,7 +726,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun editColor(index: Int) {
-        ColorPicker.show(this, palette[index]) { picked ->
+        // Pen colors: just a hue bar (and presets); other tools keep the full editor.
+        ColorPicker.show(this, palette[index], hueOnly = currentTool == DrawTool.PEN) { picked ->
             palette[index] = picked
             selectColor(index)
             saveToolPrefs()
@@ -3637,6 +3644,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         private const val SAMSUNG_PEN_MOVE = 213
 
         private const val PREF_TOOL = "current_tool"
+        private const val PREF_PEN_PRESSURE = "pen_pressure"
         private const val PREF_TOOL_ON = "tool_on"
         private const val PREF_ERASER_PIXEL = "eraser_pixel"
         private const val PREF_TABS = "open_tabs"

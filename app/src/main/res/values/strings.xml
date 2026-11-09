@@ -188,6 +188,8 @@
     <string name="set_hl_smoothing">Free Highlighter Smoothing</string>
     <string name="tool_image">Image</string>
     <string name="tool_select">Select</string>
+    <string name="pressure_on">Pressure</string>
+    <string name="pressure_off">Even</string>
     <string name="tool_write_text">Write to text</string>
     <string name="to_text">To text</string>
     <string name="lang_thai">Thai</string>

@@ -69,6 +69,8 @@ class PdfPageView(context: Context) : View(context) {
         val fingerDraw: Boolean get() = false
         /** true = erase only the touched part of strokes; false = erase whole strokes. */
         val eraserPixelMode: Boolean get() = false
+        /** Pen: line width follows pen pressure (false: even width). */
+        val penPressure: Boolean get() = true
         /** Eraser size (its own setting; also used for the S Pen side button). */
         val eraserWidth: Float get() = strokeWidth
         fun annotationsFor(page: Int): PageAnnotations
@@ -1371,6 +1373,7 @@ class PdfPageView(context: Context) : View(context) {
             DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.WRITE_TEXT -> {
                 mode = Mode.INK
                 handwriting = tool == DrawTool.WRITE_TEXT
+                usePressure = tool != DrawTool.PEN || h.penPressure
                 val hl = tool == DrawTool.HIGHLIGHTER
                 active = InkStroke(mutableListOf(), h.color, if (hl) h.strokeWidth * 5f else h.strokeWidth, hl)
                 addPoint(e.x, e.y, e.pressure)
@@ -1379,9 +1382,12 @@ class PdfPageView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** Pressure on for this stroke (the pen's "even width" option stores a neutral pressure). */
+    private var usePressure = true
+
     private fun addPoint(x: Float, y: Float, pressure: Float) {
         if (!toNormalized(x, y)) return
-        active?.points?.add(StrokePoint(pt[0], pt[1], pressure))
+        active?.points?.add(StrokePoint(pt[0], pt[1], if (usePressure) pressure else NEUTRAL_PRESSURE))
     }
 
     private fun appendPoints(e: MotionEvent) {
@@ -1553,6 +1559,9 @@ class PdfPageView(context: Context) : View(context) {
         var penButtonOverride = false
 
         fun pressureScale(p: Float): Float = 0.4f + p.coerceIn(0f, 1f) * 1.2f
+
+        /** pressureScale(0.5) = 1: the stroke has exactly the chosen width. */
+        const val NEUTRAL_PRESSURE = 0.5f
 
         /** Tools whose items can be selected and dragged with a frame. */
         private val DRAGGABLE_TOOLS = setOf(

@@ -26,7 +26,8 @@ object ColorPicker {
         0xFF2563EB.toInt(), 0xFF4F46E5.toInt(), 0xFF7C3AED.toInt(), 0xFFDB2777.toInt()
     )
 
-    fun show(context: Context, initial: Int, onPicked: (Int) -> Unit) {
+    /** [hueOnly]: just the hue bar (plus presets for black / gray) — used for pen colors. */
+    fun show(context: Context, initial: Int, hueOnly: Boolean = false, onPicked: (Int) -> Unit) {
         val d = context.resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()
 
@@ -68,10 +69,13 @@ object ColorPicker {
 
         root.addView(label(context.getString(R.string.color_hue)))
         root.addView(hue)
-        root.addView(label(context.getString(R.string.color_saturation)))
-        root.addView(sat)
-        root.addView(label(context.getString(R.string.color_brightness)))
-        root.addView(bri)
+        if (!hueOnly) {
+            root.addView(label(context.getString(R.string.color_saturation)))
+            root.addView(sat)
+            root.addView(label(context.getString(R.string.color_brightness)))
+            root.addView(bri)
+        }
+        if (hueOnly) hex.visibility = View.GONE
 
         fun refresh(fromHex: Boolean) {
             updating = true
@@ -94,8 +98,14 @@ object ColorPicker {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (updating || !fromUser) return
                 hsv[0] = hue.progress.toFloat()
-                hsv[1] = sat.progress / 100f
-                hsv[2] = bri.progress / 100f
+                if (hueOnly) {
+                    // One bar: a clear, rich color of that hue.
+                    hsv[1] = 0.9f
+                    hsv[2] = 0.85f
+                } else {
+                    hsv[1] = sat.progress / 100f
+                    hsv[2] = bri.progress / 100f
+                }
                 color = Color.HSVToColor(hsv)
                 refresh(fromHex = false)
             }
