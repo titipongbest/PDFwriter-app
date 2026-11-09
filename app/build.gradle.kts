@@ -13,11 +13,11 @@ android {
         applicationId = "com.titipong.pdfwriter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 56
-        versionName = "6.5"
-        // ARM only (all Galaxy tablets/phones): keeps the OCR native libraries out of the APK for other CPUs.
+        versionCode = 57
+        versionName = "6.6"
+        // 64-bit ARM only (all current Galaxy tablets/phones): keeps native libraries for other CPUs out of the APK.
         // -PallAbis (timing test on an x86 emulator) keeps every CPU type.
-        if (!project.hasProperty("allAbis")) ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        if (!project.hasProperty("allAbis")) ndk { abiFilters += listOf("arm64-v8a") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
