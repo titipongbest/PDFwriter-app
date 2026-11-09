@@ -2443,11 +2443,23 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             }
         }
         val margin = 8 * density
+        // A framed item (text box, picture, lasso…) has its frame and handles around the box:
+        // keep the menu clear of them.
+        val framed = noteView != null && noteView === view && view.editingNote != null
+        val gap = if (framed) 26 * density * binding.recycler.scale.coerceAtLeast(1f) else margin
         val parentW = (bar.parent as View).width.toFloat()
         val parentH = (bar.parent as View).height.toFloat()
         val x = ((left + right) / 2f - bar.width / 2f).coerceIn(margin, (parentW - bar.width - margin).coerceAtLeast(margin))
-        var y = top - bar.height - margin
-        if (y < margin) y = bottom + margin
+        val above = top - bar.height - gap
+        val below = bottom + gap
+        var y = when {
+            above >= margin -> above
+            below + bar.height <= parentH - margin -> below
+            // No room above or below (a tall item): keep it at the top or bottom edge, whichever
+            // covers less of the item.
+            top - margin > parentH - bottom - margin -> margin
+            else -> parentH - bar.height - margin
+        }
         y = y.coerceIn(margin, (parentH - bar.height - margin).coerceAtLeast(margin))
         bar.translationX = x
         bar.translationY = y
