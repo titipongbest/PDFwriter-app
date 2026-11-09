@@ -2684,7 +2684,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelHighlight.visibility = View.GONE
         binding.btnSelUnderline.visibility = View.GONE
         binding.btnNoteEdit.visibility = View.GONE
-        binding.btnHlRecolor.visibility = View.GONE
+        // Color: recolors the ink and text boxes in the selection.
+        binding.btnHlRecolor.visibility =
+            if (group.items.any { it is InkStroke || it is TextNote }) View.VISIBLE else View.GONE
         binding.btnHlDelete.visibility = View.VISIBLE
         // Handwriting (pen ink) in the selection can be turned into text.
         binding.btnSelConvert.visibility =
@@ -2866,6 +2868,32 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** Pick any color for a highlight / underline that's already on the page. */
     private fun recolorTappedMarkup() {
+        tappedGroup?.let { (page, group) ->
+            val view = noteView
+            val first = group.items.firstNotNullOfOrNull { (it as? InkStroke)?.color ?: (it as? TextNote)?.color } ?: Color.BLACK
+            ColorPicker.show(this, first) { picked ->
+                val pa = pages[page] ?: return@show
+                val recolored = com.titipong.pdfwriter.model.ItemGroup(group.items.map {
+                    when (it) {
+                        is InkStroke -> InkStroke(it.points.toMutableList(), picked, it.width, it.highlighter)
+                        is TextNote -> it.copy(color = picked)
+                        else -> it
+                    }
+                })
+                group.items.zip(recolored.items).forEach { (o, n) ->
+                    when {
+                        o is InkStroke && n is InkStroke -> pa.strokes.indexOf(o).takeIf { it >= 0 }?.let { pa.strokes[it] = n }
+                        o is TextNote && n is TextNote -> pa.texts.indexOf(o).takeIf { it >= 0 }?.let { pa.texts[it] = n }
+                    }
+                }
+                history.addLast(page to NoteEdit(group, recolored))
+                if (history.size > MAX_HISTORY) history.removeFirst()
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+                markDirty()
+                if (view != null) onGroupSelected(view, page, recolored)
+            }
+            return
+        }
         tappedNote?.let { (page, note) ->
             val view = noteView
             ColorPicker.show(this, note.color) { picked ->
