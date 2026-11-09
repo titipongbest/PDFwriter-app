@@ -288,9 +288,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         setContentView(binding.root)
         if (isPhone) applyPhoneLayout()
         setSupportActionBar(binding.toolbar)
-        // The app logo instead of a title: the file name is already on its tab.
-        supportActionBar?.title = ""
+        // The app logo and name (the file name is already on its tab).
+        supportActionBar?.title = getString(R.string.app_name)
         binding.toolbar.setLogo(R.drawable.app_logo)
+        binding.toolbar.titleMarginStart = (10 * density).toInt()
         binding.toolbar.logoDescription = getString(R.string.app_name)
         onBackPressedDispatcher.addCallback(this, backCallback)
         viewSettings = ViewSettings.load(prefs)
@@ -1843,7 +1844,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             addTab(uri, name)
             applyView(prefs.getInt("page_$key", 0).coerceIn(0, (opened.doc.pageCount - 1).coerceAtLeast(0)))
             if (interactionView) prepareTextIndex()
-            supportActionBar?.title = "" // the name is on the tab
+            supportActionBar?.title = getString(R.string.app_name) // the file name is on the tab
             setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
             binding.recycler.post { updatePageIndicator() }
             if (remember) prefs.edit().putString(PREF_LAST_URI, uri.toString()).apply()
@@ -2101,7 +2102,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         outline = emptyList()
         history.clear()
         binding.emptyView.visibility = View.VISIBLE
-        supportActionBar?.title = ""
+        supportActionBar?.title = getString(R.string.app_name)
         supportActionBar?.subtitle = null
         binding.tvSaveState.text = ""
         prefs.edit().remove(PREF_LAST_URI).apply()
