@@ -1,6 +1,6 @@
 package com.titipong.pdfwriter.model
 
-enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE, SELECT }
+enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE, SELECT, WRITE_TEXT }
 
 /** Several items picked together with the lasso (strokes, text boxes, pictures). */
 class ItemGroup(val items: List<Any>)

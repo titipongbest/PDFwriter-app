@@ -53,6 +53,8 @@ class PdfPageView(context: Context) : View(context) {
         fun onStrokeTapped(view: PdfPageView, page: Int, stroke: InkStroke) {}
         /** Select tool: items circled with the lasso (or tapped again). */
         fun onGroupSelected(view: PdfPageView, page: Int, group: ItemGroup) {}
+        /** Handwriting-to-text tool: a stroke was written (kept aside until it is converted). */
+        fun onHandwritingStroke(view: PdfPageView, page: Int, stroke: InkStroke) {}
         /** Lines of the document's own text on [page] (normalized boxes), to align notes / pictures with. */
         fun guideBoxes(page: Int): List<RectF> = emptyList()
         /** The selected text note is being dragged (hide popups), and was moved / resized. */
@@ -277,6 +279,7 @@ class PdfPageView(context: Context) : View(context) {
 
     fun release() {
         editingNote = null
+        pendingInk.clear()
         inkCache?.recycle()
         inkCache = null
         inkDirty = true
@@ -455,6 +458,12 @@ class PdfPageView(context: Context) : View(context) {
                 renderAnnotations(canvas, a, s, lk.inkFilter)
                 canvas.restore()
             }
+        }
+        if (pendingInk.isNotEmpty()) {
+            canvas.save()
+            canvas.concat(toView)
+            for (st in pendingInk) drawStroke(canvas, st, s, lk.inkFilter)
+            canvas.restore()
         }
         active?.let {
             canvas.save()
@@ -1252,8 +1261,9 @@ class PdfPageView(context: Context) : View(context) {
                 lasso.clear()
                 if (toNormalized(e.x, e.y)) lasso.add(PointF(pt[0], pt[1]))
             }
-            DrawTool.PEN, DrawTool.HIGHLIGHTER -> {
+            DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.WRITE_TEXT -> {
                 mode = Mode.INK
+                handwriting = tool == DrawTool.WRITE_TEXT
                 val hl = tool == DrawTool.HIGHLIGHTER
                 active = InkStroke(mutableListOf(), h.color, if (hl) h.strokeWidth * 5f else h.strokeWidth, hl)
                 addPoint(e.x, e.y, e.pressure)
@@ -1274,10 +1284,22 @@ class PdfPageView(context: Context) : View(context) {
         addPoint(e.x, e.y, e.pressure)
     }
 
+    /** The stroke being drawn is handwriting to convert to text (not saved as ink). */
+    private var handwriting = false
+
+    /** Handwriting waiting to be converted to text (drawn on top, not part of the page's ink). */
+    val pendingInk = ArrayList<InkStroke>()
+
     private fun commitStroke(h: Host) {
         val s = active ?: return
         active = null
         if (s.points.isEmpty()) return
+        if (handwriting) {
+            pendingInk.add(s)
+            invalidate()
+            h.onHandwritingStroke(this, pageIndex, s)
+            return
+        }
         refineStroke(s, h)
         val a = annotations ?: h.annotationsFor(pageIndex).also { annotations = it }
         a.strokes.add(s)

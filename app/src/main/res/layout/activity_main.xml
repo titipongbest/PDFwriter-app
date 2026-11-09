@@ -179,6 +179,12 @@
                 android:contentDescription="@string/tool_select"
                 android:src="@drawable/ic_lasso" />
 
+            <ImageButton
+                android:id="@+id/btnWriteText"
+                style="@style/ToolButton"
+                android:contentDescription="@string/tool_write_text"
+                android:src="@drawable/ic_write_text" />
+
             <View style="@style/ToolDivider" />
 
             <LinearLayout
@@ -209,6 +215,31 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/erase_pixel" />
+            </com.google.android.material.button.MaterialButtonToggleGroup>
+
+            <!-- Write to text: handwriting language -->
+            <com.google.android.material.button.MaterialButtonToggleGroup
+                android:id="@+id/inkLangGroup"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:visibility="gone"
+                app:selectionRequired="true"
+                app:singleSelection="true">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLangTh"
+                    style="@style/CompactOutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="TH" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLangEn"
+                    style="@style/CompactOutlinedButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="EN" />
             </com.google.android.material.button.MaterialButtonToggleGroup>
 
             <View
@@ -447,6 +478,14 @@
                 android:text="@string/edit"
                 android:visibility="gone"
                 app:icon="@drawable/ic_pen" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSelConvert"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/to_text"
+                android:visibility="gone" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnHlDelete"

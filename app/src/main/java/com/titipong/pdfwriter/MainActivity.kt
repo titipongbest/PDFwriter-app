@@ -95,7 +95,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         DrawTool.TEXT to ToolSetting(DEFAULT_COLORS.toMutableList(), 0, 30),
         DrawTool.ERASER to ToolSetting(mutableListOf(), 0, 40),
         DrawTool.IMAGE to ToolSetting(mutableListOf(), 0, 30),
-        DrawTool.SELECT to ToolSetting(mutableListOf(), 0, 30)
+        DrawTool.SELECT to ToolSetting(mutableListOf(), 0, 30),
+        DrawTool.WRITE_TEXT to ToolSetting(DEFAULT_COLORS.toMutableList(), 0, 25)
     )
     private val cur: ToolSetting get() = toolSettings.getValue(currentTool)
     private val palette: MutableList<Int> get() = cur.palette
@@ -512,6 +513,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.TEXT] = binding.btnText
         toolButtons[DrawTool.IMAGE] = binding.btnImage
         toolButtons[DrawTool.SELECT] = binding.btnSelect
+        toolButtons[DrawTool.WRITE_TEXT] = binding.btnWriteText
         toolButtons.forEach { (t, v) ->
             v.setOnClickListener {
                 if (t == currentTool && toolOn) {
@@ -588,6 +590,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.tvSize.setOnClickListener { promptSize() }
         binding.btnViewUndo.setOnClickListener { undoLast() }
         eraserPixel = prefs.getBoolean(PREF_ERASER_PIXEL, false)
+        binding.inkLangGroup.check(if (handwritingLang == "en") R.id.btnLangEn else R.id.btnLangTh)
+        binding.inkLangGroup.addOnButtonCheckedListener { _, id, checked ->
+            if (checked) {
+                handwritingLang = if (id == R.id.btnLangEn) "en" else "th"
+                prefs.edit().putString(PREF_HW_LANG, handwritingLang).apply()
+                ensureHandwritingModel()
+            }
+        }
+        binding.btnSelConvert.setOnClickListener { convertSelectedHandwriting() }
         binding.eraserModeGroup.check(if (eraserPixel) R.id.btnErasePixel else R.id.btnEraseStroke)
         binding.eraserModeGroup.addOnButtonCheckedListener { _, id, checked ->
             if (checked) {
@@ -651,6 +662,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     /** Switches tool and shows that tool's own colors and size. */
     private fun selectTool(t: DrawTool) {
         clearSelection() // a framed note / picture / stroke belongs to the previous tool
+        flushHandwriting() // leaving "Write to text": convert what was written
         currentTool = t
         toolOn = true
         toolButtons.forEach { (key, v) -> v.isSelected = key == t }
@@ -658,7 +670,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         // Pictures have no color or size: resize them with their frame.
-        val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT) View.GONE else View.VISIBLE
+        binding.inkLangGroup.visibility = if (t == DrawTool.WRITE_TEXT) View.VISIBLE else View.GONE
+        if (t == DrawTool.WRITE_TEXT && toolActive) ensureHandwritingModel()
+        val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT || t == DrawTool.WRITE_TEXT) View.GONE else View.VISIBLE
         listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
             .forEach { it.visibility = sized }
         if (isPhone) binding.tvSizeLabel.visibility = View.GONE // no room on phones
@@ -799,6 +813,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 is TextNote -> pa.texts.remove(item)
                 is ImageNote -> pa.images.remove(item)
                 is TextHighlight -> pa.highlights.remove(item)
+                is ConvertEdit -> {
+                    pa.texts.remove(item.note)
+                    pa.strokes.addAll(item.strokes)
+                    true
+                }
                 is GroupDelete -> {
                     for (it in item.items) when (it) {
                         is TextNote -> pa.texts.add(it)
@@ -2479,6 +2498,150 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private var tappedImage: Pair<Int, ImageNote>? = null
     private var tappedStroke: Pair<Int, InkStroke>? = null
+
+    // ---------------------------------------------------------------- handwriting to text
+
+    private val PREF_HW_LANG = "hw_lang"
+    private var handwritingLang: String = "th"
+        get() = prefs.getString(PREF_HW_LANG, field) ?: field
+    private var hwView: PdfPageView? = null
+    private var hwPage = -1
+    private var hwJob: Job? = null
+
+    /** A stroke written with "Write to text": convert everything written once the pen rests. */
+    override fun onHandwritingStroke(view: PdfPageView, page: Int, stroke: InkStroke) {
+        if (hwView != null && (hwView !== view || hwPage != page)) flushHandwriting() // other page: convert that first
+        hwView = view
+        hwPage = page
+        hwJob?.cancel()
+        hwJob = lifecycleScope.launch {
+            delay(1300)
+            flushHandwriting()
+        }
+    }
+
+    private fun flushHandwriting() {
+        hwJob?.cancel()
+        val view = hwView ?: return
+        val page = hwPage
+        hwView = null
+        val strokes = ArrayList(view.pendingInk)
+        view.pendingInk.clear()
+        if (strokes.isEmpty()) return
+        lifecycleScope.launch {
+            val note = recognizeToNote(strokes)
+            if (note == null) {
+                // Not understood: keep the writing as ink so nothing is lost.
+                val pa = annotationsFor(page)
+                strokes.forEach { pa.strokes.add(it); onItemAdded(page, it) }
+            } else {
+                annotationsFor(page).texts.add(note)
+                onItemAdded(page, note)
+            }
+            view.invalidate()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+        }
+    }
+
+    /** Recognizes handwriting into a text box placed where it was written (same color, similar size). */
+    private suspend fun recognizeToNote(strokes: List<InkStroke>): TextNote? {
+        val model = com.titipong.pdfwriter.ocr.Handwriting.model(handwritingLang)
+        if (model == null) {
+            Toast.makeText(this, R.string.hw_unsupported, Toast.LENGTH_LONG).show()
+            return null
+        }
+        val lines = try {
+            if (!com.titipong.pdfwriter.ocr.Handwriting.isDownloaded(model)) {
+                ensureHandwritingModel()
+                return null
+            }
+            com.titipong.pdfwriter.ocr.Handwriting.recognize(model, strokes)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Toast.makeText(this, R.string.hw_failed, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        if (lines.isEmpty()) {
+            Toast.makeText(this, R.string.hw_failed, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        val first = lines.first().box
+        // Handwriting boxes include ascenders / marks: the text size is a bit smaller than a line.
+        val size = (lines.map { it.box.height() }.average().toFloat() * 0.7f).coerceIn(0.008f, 0.2f)
+        val color = strokes.firstOrNull()?.color ?: Color.BLACK
+        val left = lines.minOf { it.box.left }
+        return TextNote(lines.joinToString("\n") { it.text }, left, first.top + size, color, size)
+    }
+
+    /** The handwriting model for the chosen language must be on the device (asks to download it once). */
+    private fun ensureHandwritingModel() {
+        val lang = handwritingLang
+        val model = com.titipong.pdfwriter.ocr.Handwriting.model(lang)
+        if (model == null) {
+            Toast.makeText(this, R.string.hw_unsupported, Toast.LENGTH_LONG).show()
+            return
+        }
+        lifecycleScope.launch {
+            val have = try { com.titipong.pdfwriter.ocr.Handwriting.isDownloaded(model) } catch (e: Throwable) { false }
+            if (have) return@launch
+            val name = getString(if (lang == "en") R.string.lang_english else R.string.lang_thai)
+            MaterialAlertDialogBuilder(this@MainActivity)
+                .setTitle(R.string.hw_download_title)
+                .setMessage(getString(R.string.hw_download_message, name))
+                .setPositiveButton(R.string.download) { _, _ -> downloadHandwritingModel(model) }
+                .setNegativeButton(R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun downloadHandwritingModel(model: com.google.mlkit.vision.digitalink.DigitalInkRecognitionModel) {
+        val progress = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.hw_downloading)
+            .setView(com.google.android.material.progressindicator.LinearProgressIndicator(this).apply {
+                isIndeterminate = true
+                val p = (24 * density).toInt()
+                setPadding(p, p / 2, p, p / 2)
+            })
+            .setCancelable(false)
+            .show()
+        lifecycleScope.launch {
+            val ok = try {
+                com.titipong.pdfwriter.ocr.Handwriting.download(model)
+                true
+            } catch (e: Throwable) {
+                false
+            }
+            progress.dismiss()
+            Toast.makeText(
+                this@MainActivity,
+                if (ok) R.string.hw_ready else R.string.hw_download_failed,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /** Select menu: convert the handwriting in the lasso selection to a text box. */
+    private fun convertSelectedHandwriting() {
+        val (page, group) = tappedGroup ?: return
+        val ink = group.items.filterIsInstance<InkStroke>().filter { !it.highlighter }
+        if (ink.isEmpty()) return
+        clearSelection()
+        lifecycleScope.launch {
+            val note = recognizeToNote(ink) ?: return@launch
+            val pa = annotationsFor(page)
+            pa.strokes.removeAll(ink.toSet())
+            pa.texts.add(note)
+            history.addLast(page to ConvertEdit(ink, note))
+            if (history.size > MAX_HISTORY) history.removeFirst()
+            adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+            markDirty()
+        }
+    }
+
+    /** Undo record for handwriting converted to text: the ink comes back, the text goes. */
+    private class ConvertEdit(val strokes: List<InkStroke>, val note: TextNote)
     private var tappedGroup: Pair<Int, com.titipong.pdfwriter.model.ItemGroup>? = null
 
     override fun onGroupSelected(view: PdfPageView, page: Int, group: com.titipong.pdfwriter.model.ItemGroup) {
@@ -2492,6 +2655,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnNoteEdit.visibility = View.GONE
         binding.btnHlRecolor.visibility = View.GONE
         binding.btnHlDelete.visibility = View.VISIBLE
+        // Handwriting (pen ink) in the selection can be turned into text.
+        binding.btnSelConvert.visibility =
+            if (group.items.any { it is InkStroke && !it.highlighter }) View.VISIBLE else View.GONE
         var box: RectF? = null
         for (it in group.items) {
             val r = when (it) {
@@ -2621,7 +2787,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private var noteView: PdfPageView? = null
 
+    private fun clearSelectionBarExtras() {
+        binding.btnSelConvert.visibility = View.GONE
+    }
+
     private fun clearSelection() {
+        clearSelectionBarExtras()
         noteView?.editingNote = null
         noteView = null
         selView?.selectionRects = null

@@ -13,8 +13,8 @@ android {
         applicationId = "com.titipong.pdfwriter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 55
-        versionName = "6.4"
+        versionCode = 56
+        versionName = "6.5"
         // ARM only (all Galaxy tablets/phones): keeps the OCR native libraries out of the APK for other CPUs.
         // -PallAbis (timing test on an x86 emulator) keeps every CPU type.
         if (!project.hasProperty("allAbis")) ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
@@ -87,6 +87,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.pdfbox.android)
     implementation(libs.tesseract4android)
+    // Handwriting to text (on device; language models downloaded once)
+    implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
 
     androidTestImplementation("androidx.test:runner:1.5.2")
     androidTestImplementation("androidx.test:core-ktx:1.5.0")
