@@ -27,7 +27,14 @@ object ColorPicker {
     )
 
     /** [hueOnly]: just the hue bar (plus presets for black / gray) — used for pen colors. */
-    fun show(context: Context, initial: Int, hueOnly: Boolean = false, onPicked: (Int) -> Unit) {
+    /**
+     * [pressure]: when not null (pen), also shows the line option Pressure / Even; the choice is
+     * given to [onPressure] on OK.
+     */
+    fun show(
+        context: Context, initial: Int, hueOnly: Boolean = false,
+        pressure: Boolean? = null, onPressure: (Boolean) -> Unit = {}, onPicked: (Int) -> Unit
+    ) {
         val d = context.resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()
 
@@ -162,12 +169,36 @@ object ColorPicker {
             root.addView(line)
         }
 
+        // Pen line: width follows pressure, or even.
+        var usePressure = pressure ?: true
+        if (pressure != null) {
+            root.addView(label(context.getString(R.string.pen_line)))
+            val group = com.google.android.material.button.MaterialButtonToggleGroup(context).apply {
+                isSingleSelection = true
+                isSelectionRequired = true
+            }
+            val on = com.google.android.material.button.MaterialButton(
+                context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+            ).apply { id = View.generateViewId(); setText(R.string.pressure_on) }
+            val off = com.google.android.material.button.MaterialButton(
+                context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle
+            ).apply { id = View.generateViewId(); setText(R.string.pressure_off) }
+            group.addView(on)
+            group.addView(off)
+            group.check(if (pressure) on.id else off.id)
+            group.addOnButtonCheckedListener { _, id, checked -> if (checked) usePressure = id == on.id }
+            root.addView(group)
+        }
+
         refresh(fromHex = false)
 
         MaterialAlertDialogBuilder(context)
             .setTitle(R.string.edit_color)
             .setView(root)
-            .setPositiveButton(R.string.ok) { _, _ -> onPicked(color or 0xFF000000.toInt()) }
+            .setPositiveButton(R.string.ok) { _, _ ->
+                if (pressure != null) onPressure(usePressure)
+                onPicked(color or 0xFF000000.toInt())
+            }
             .setNegativeButton(R.string.cancel, null)
             .show()
     }

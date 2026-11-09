@@ -591,10 +591,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.tvSize.setOnClickListener { promptSize() }
         binding.btnViewUndo.setOnClickListener { undoLast() }
         eraserPixel = prefs.getBoolean(PREF_ERASER_PIXEL, false)
-        binding.pressureGroup.check(if (penPressure) R.id.btnPressureOn else R.id.btnPressureOff)
-        binding.pressureGroup.addOnButtonCheckedListener { _, id, checked ->
-            if (checked) prefs.edit().putBoolean(PREF_PEN_PRESSURE, id == R.id.btnPressureOn).apply()
-        }
         binding.inkLangGroup.check(if (handwritingLang == "en") R.id.btnLangEn else R.id.btnLangTh)
         binding.inkLangGroup.addOnButtonCheckedListener { _, id, checked ->
             if (checked) {
@@ -675,7 +671,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         // Pictures have no color or size: resize them with their frame.
-        binding.pressureGroup.visibility = if (t == DrawTool.PEN) View.VISIBLE else View.GONE
         // Handwriting language for "To text" (lasso handwriting with the Select tool).
         binding.inkLangGroup.visibility = if (t == DrawTool.SELECT) View.VISIBLE else View.GONE
         val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT || t == DrawTool.WRITE_TEXT) View.GONE else View.VISIBLE
@@ -727,7 +722,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun editColor(index: Int) {
         // Pen colors: just a hue bar (and presets); other tools keep the full editor.
-        ColorPicker.show(this, palette[index], hueOnly = currentTool == DrawTool.PEN) { picked ->
+        val pen = currentTool == DrawTool.PEN
+        ColorPicker.show(
+            this, palette[index], hueOnly = pen,
+            pressure = if (pen) penPressure else null,
+            onPressure = { prefs.edit().putBoolean(PREF_PEN_PRESSURE, it).apply() }
+        ) { picked ->
             palette[index] = picked
             selectColor(index)
             saveToolPrefs()

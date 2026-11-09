@@ -188,6 +188,7 @@
     <string name="set_hl_smoothing">Free Highlighter Smoothing</string>
     <string name="tool_image">Image</string>
     <string name="tool_select">Select</string>
+    <string name="pen_line">Line</string>
     <string name="pressure_on">Pressure</string>
     <string name="pressure_off">Even</string>
     <string name="tool_write_text">Write to text</string>
