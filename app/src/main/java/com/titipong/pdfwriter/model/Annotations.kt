@@ -2,6 +2,24 @@ package com.titipong.pdfwriter.model
 
 enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE, SELECT, WRITE_TEXT }
 
+/**
+ * Highlight opacity is kept in the color's alpha: 255 (opaque, also every older color) means the
+ * default opacity; anything else is the chosen opacity.
+ */
+object Opacity {
+    const val INK_DEFAULT = 0.35f      // highlighter pen (Annotate)
+    const val TEXT_DEFAULT = 0.45f     // text highlight (View)
+    fun of(color: Int, default: Float): Float {
+        val a = (color ushr 24) and 0xFF
+        return if (a == 255) default else a / 255f
+    }
+    /** [color] with opacity [o] (0.1..1) stored in its alpha (never 255, which means "default"). */
+    fun with(color: Int, o: Float): Int {
+        val a = Math.round(o.coerceIn(0.1f, 1f) * 254f)
+        return (color and 0xFFFFFF) or (a shl 24)
+    }
+}
+
 /** Several items picked together with the lasso (strokes, text boxes, pictures). */
 class ItemGroup(val items: List<Any>)
 

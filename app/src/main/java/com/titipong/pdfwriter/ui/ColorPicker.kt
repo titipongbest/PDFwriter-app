@@ -33,6 +33,8 @@ object ColorPicker {
      */
     fun show(
         context: Context, initial: Int, hueOnly: Boolean = false, light: Boolean = false,
+        /** Not null: also an opacity slider, starting from the color's opacity (or this default). */
+        opacityDefault: Float? = null,
         pressure: Boolean? = null, onPressure: (Boolean) -> Unit = {}, onPicked: (Int) -> Unit
     ) {
         val d = context.resources.displayMetrics.density
@@ -40,7 +42,7 @@ object ColorPicker {
 
         val hsv = FloatArray(3)
         Color.colorToHSV(initial, hsv)
-        var color = initial
+        var color = initial or 0xFF000000.toInt()
         var updating = false
 
         val root = LinearLayout(context).apply {
@@ -170,6 +172,30 @@ object ColorPicker {
             root.addView(line)
         }
 
+        // Highlight opacity.
+        var opacity = opacityDefault?.let { com.titipong.pdfwriter.model.Opacity.of(initial, it) } ?: 1f
+        if (opacityDefault != null) {
+            val title = label("")
+            fun setTitle() { title.text = context.getString(R.string.opacity, Math.round(opacity * 100)) }
+            setTitle()
+            root.addView(title)
+            val bar = SeekBar(context).apply {
+                max = 90
+                progress = (Math.round(opacity * 100) - 10).coerceIn(0, 90)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                        opacity = (p + 10) / 100f
+                        setTitle()
+                        preview.alpha = opacity
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
+            root.addView(bar)
+            preview.alpha = opacity
+        }
+
         // Pen line: width follows pressure, or even.
         var usePressure = pressure ?: true
         if (pressure != null) {
@@ -198,7 +224,8 @@ object ColorPicker {
             .setView(root)
             .setPositiveButton(R.string.ok) { _, _ ->
                 if (pressure != null) onPressure(usePressure)
-                onPicked(color or 0xFF000000.toInt())
+                val opaque = color or 0xFF000000.toInt()
+                onPicked(if (opacityDefault != null) com.titipong.pdfwriter.model.Opacity.with(opaque, opacity) else opaque)
             }
             .setNegativeButton(R.string.cancel, null)
             .show()

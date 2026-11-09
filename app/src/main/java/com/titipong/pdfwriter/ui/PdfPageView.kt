@@ -408,7 +408,7 @@ class PdfPageView(context: Context) : View(context) {
                     canvas.drawRect(r.left * s, r.bottom * s - thick, r.right * s, r.bottom * s, highlightPaint)
                 }
             } else {
-                highlightPaint.alpha = 115
+                highlightPaint.alpha = Math.round(com.titipong.pdfwriter.model.Opacity.of(hl.color, com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) * 255)
                 for (r in hl.rects) canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, highlightPaint)
             }
         }
@@ -566,7 +566,7 @@ class PdfPageView(context: Context) : View(context) {
         inkPaint.colorFilter = filter
         inkPaint.color = st.color
         if (st.highlighter) {
-            inkPaint.alpha = 90
+            inkPaint.alpha = Math.round(com.titipong.pdfwriter.model.Opacity.of(st.color, com.titipong.pdfwriter.model.Opacity.INK_DEFAULT) * 255)
             inkPaint.strokeCap = Paint.Cap.ROUND // rounded ends
             inkPaint.strokeWidth = st.width * s
             path.reset()

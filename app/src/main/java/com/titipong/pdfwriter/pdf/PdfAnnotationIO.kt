@@ -87,6 +87,7 @@ object PdfAnnotationIO {
     private val PW_W = COSName.getPDFName("PWW")
     private val PW_H = COSName.getPDFName("PWH")
     private val PW_ALIGN = COSName.getPDFName("PWAlign")
+    private val PW_OPACITY = COSName.getPDFName("PWOpacity")
 
     /** Where pictures read from PDFs are stored (set by App). */
     @Volatile
@@ -197,7 +198,7 @@ object PdfAnnotationIO {
         if (inkList == null || geo.displayWidth <= 0f) {
             null
         } else {
-            val color = readColor(d.getDictionaryObject(COSName.C) as? COSArray)
+            val color = withOpacity(readColor(d.getDictionaryObject(COSName.C) as? COSArray), d)
             val bs = d.getDictionaryObject(COSName.BS) as? COSDictionary
             val border = d.getDictionaryObject(BORDER) as? COSArray
             val widthPt = num(bs?.getDictionaryObject(COSName.W))
@@ -252,7 +253,7 @@ object PdfAnnotationIO {
             }
             if (rects.isEmpty()) null
             else TextHighlight(
-                rects, readColor(d.getDictionaryObject(COSName.C) as? COSArray), d.getString(COSName.CONTENTS) ?: "", underline
+                rects, withOpacity(readColor(d.getDictionaryObject(COSName.C) as? COSArray), d), d.getString(COSName.CONTENTS) ?: "", underline
             )
         }
     } catch (e: Exception) {
@@ -326,6 +327,10 @@ object PdfAnnotationIO {
     } catch (e: Throwable) {
         null
     }
+
+    /** A chosen highlight opacity saved with the annotation goes back into the color's alpha. */
+    private fun withOpacity(color: Int, d: COSDictionary): Int =
+        num(d.getDictionaryObject(PW_OPACITY))?.let { com.titipong.pdfwriter.model.Opacity.with(color, it) } ?: color
 
     private fun readColor(arr: COSArray?): Int {
         if (arr == null) return Color.BLACK
@@ -691,6 +696,7 @@ object PdfAnnotationIO {
         d.setItem(INK_LIST, COSArray().apply { add(path) })
         d.setItem(PW_PRESSURE, COSArray().apply { add(press) })
         d.setItem(COSName.C, colorArray(s.color))
+        if ((s.color ushr 24) != 255) d.setFloat(PW_OPACITY, ((s.color ushr 24) and 0xFF) / 255f)
         d.setItem(COSName.BS, COSDictionary().apply {
             setFloat(COSName.W, basePt)
             setItem(COSName.S, COSName.getPDFName("S"))
@@ -708,7 +714,7 @@ object PdfAnnotationIO {
             cs.transform(geo.displayUpMatrix())
             if (s.highlighter) {
                 val gs = PDExtendedGraphicsState()
-                gs.strokingAlphaConstant = HIGHLIGHT_ALPHA
+                gs.strokingAlphaConstant = com.titipong.pdfwriter.model.Opacity.of(s.color, HIGHLIGHT_ALPHA)
                 gs.blendMode = BlendMode.MULTIPLY
                 cs.setGraphicsStateParameters(gs)
             }
@@ -770,6 +776,8 @@ object PdfAnnotationIO {
         d.setItem(QUAD_POINTS, quads)
         d.setItem(COSName.C, colorArray(h.color))
         d.setFloat(COSName.CA, 1f)
+        val chosen = (h.color ushr 24) != 255
+        if (chosen) d.setFloat(PW_OPACITY, ((h.color ushr 24) and 0xFF) / 255f)
         if (h.text.isNotEmpty()) d.setString(COSName.CONTENTS, h.text)
 
         val annot = PDAnnotation.createAnnotation(d)
@@ -791,6 +799,7 @@ object PdfAnnotationIO {
             } else {
                 val gs = PDExtendedGraphicsState()
                 gs.blendMode = BlendMode.MULTIPLY // text under the highlight stays readable
+                if (chosen) gs.nonStrokingAlphaConstant = ((h.color ushr 24) and 0xFF) / 255f
                 cs.setGraphicsStateParameters(gs)
                 for (r in h.rects) {
                     val x = geo.upX(r.left)

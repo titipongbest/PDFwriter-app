@@ -723,8 +723,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun editColor(index: Int) {
         // Pen colors: just a hue bar (and presets); other tools keep the full editor.
         val pen = currentTool == DrawTool.PEN
+        val hl = currentTool == DrawTool.HIGHLIGHTER
         ColorPicker.show(
-            this, palette[index], hueOnly = pen,
+            this, palette[index], hueOnly = pen || hl, light = hl,
+            opacityDefault = if (hl) com.titipong.pdfwriter.model.Opacity.INK_DEFAULT else null,
             pressure = if (pen) penPressure else null,
             onPressure = { prefs.edit().putBoolean(PREF_PEN_PRESSURE, it).apply() }
         ) { picked ->
@@ -2297,7 +2299,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun editMarkupColor(index: Int) {
-        ColorPicker.show(this, markupPalette[index], hueOnly = true, light = true) { picked ->
+        ColorPicker.show(this, markupPalette[index], hueOnly = true, light = true,
+            opacityDefault = com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) { picked ->
             markupPalette[index] = picked
             prefs.edit().putString(PREF_HL_PALETTE, markupPalette.joinToString(",")).apply()
             selectHighlightColor(index)
@@ -2930,7 +2933,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         tappedStroke?.let { (page, stroke) ->
             val view = noteView
-            ColorPicker.show(this, stroke.color) { picked ->
+            ColorPicker.show(
+                this, stroke.color, hueOnly = stroke.highlighter, light = stroke.highlighter,
+                opacityDefault = if (stroke.highlighter) com.titipong.pdfwriter.model.Opacity.INK_DEFAULT else null
+            ) { picked ->
                 val list = pages[page]?.strokes ?: return@show
                 val i = list.indexOf(stroke)
                 if (i < 0) return@show
@@ -2944,7 +2950,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             return
         }
         val (page, hl) = tappedHighlight ?: return
-        ColorPicker.show(this, hl.color, hueOnly = true, light = true) { picked ->
+        ColorPicker.show(this, hl.color, hueOnly = true, light = true,
+            opacityDefault = com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) { picked ->
             val list = pages[page]?.highlights ?: return@show
             val i = list.indexOf(hl)
             if (i < 0) return@show
