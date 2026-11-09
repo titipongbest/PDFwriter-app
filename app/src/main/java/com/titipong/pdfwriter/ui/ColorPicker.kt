@@ -32,7 +32,7 @@ object ColorPicker {
      * given to [onPressure] on OK.
      */
     fun show(
-        context: Context, initial: Int, hueOnly: Boolean = false,
+        context: Context, initial: Int, hueOnly: Boolean = false, light: Boolean = false,
         pressure: Boolean? = null, onPressure: (Boolean) -> Unit = {}, onPicked: (Int) -> Unit
     ) {
         val d = context.resources.displayMetrics.density
@@ -107,8 +107,9 @@ object ColorPicker {
                 hsv[0] = hue.progress.toFloat()
                 if (hueOnly) {
                     // One bar: a clear, rich color of that hue.
-                    hsv[1] = 0.9f
-                    hsv[2] = 0.85f
+                    // [light]: brighter, for highlight / underline colors.
+                    hsv[1] = if (light) 0.8f else 0.9f
+                    hsv[2] = if (light) 0.98f else 0.85f
                 } else {
                     hsv[1] = sat.progress / 100f
                     hsv[2] = bri.progress / 100f

@@ -2297,7 +2297,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun editMarkupColor(index: Int) {
-        ColorPicker.show(this, markupPalette[index]) { picked ->
+        ColorPicker.show(this, markupPalette[index], hueOnly = true, light = true) { picked ->
             markupPalette[index] = picked
             prefs.edit().putString(PREF_HL_PALETTE, markupPalette.joinToString(",")).apply()
             selectHighlightColor(index)
@@ -2944,7 +2944,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             return
         }
         val (page, hl) = tappedHighlight ?: return
-        ColorPicker.show(this, hl.color) { picked ->
+        ColorPicker.show(this, hl.color, hueOnly = true, light = true) { picked ->
             val list = pages[page]?.highlights ?: return@show
             val i = list.indexOf(hl)
             if (i < 0) return@show
