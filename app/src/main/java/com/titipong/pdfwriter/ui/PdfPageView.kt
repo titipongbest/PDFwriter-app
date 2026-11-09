@@ -813,7 +813,11 @@ class PdfPageView(context: Context) : View(context) {
             maxOf(w, hh) * pageScale < touchSlop * 2
         }
         if (small) {
-            if (editingNote != null) h.onNoteDeselect()
+            // A tap, not a lasso: select the item under it on its own.
+            val p = pts.firstOrNull()
+            if (p == null || !selectItemAt(h, p.x, p.y)) {
+                if (editingNote != null) h.onNoteDeselect()
+            }
             return
         }
         lasso.addAll(pts)
@@ -856,6 +860,29 @@ class PdfPageView(context: Context) : View(context) {
         return true
     }
 
+    /**
+     * Select tool tap: the topmost item under (x, y) gets its own frame — a text box (move, resize,
+     * color, edit), a picture, a highlighter line, or pen ink (move, color, To text, delete).
+     */
+    private fun selectItemAt(h: Host, x: Float, y: Float): Boolean {
+        val a = annotations ?: return false
+        textAt(x, y)?.let { h.onTextTapped(this, pageIndex, it); return true }
+        a.images.lastOrNull { x >= it.x && x <= it.x + it.w && y >= it.y && y <= it.y + it.h }?.let {
+            h.onImageTapped(this, pageIndex, it)
+            return true
+        }
+        val reachPad = 6f * density / pageScale.coerceAtLeast(1f)
+        val stroke = a.strokes.lastOrNull { st ->
+            val reach = st.width / 2f + reachPad
+            val pts = st.points
+            pts.any { hypot(it.x - x, it.y - y) < reach } ||
+                (1 until pts.size).any { segDist(pts[it - 1], pts[it], x, y) < reach }
+        } ?: return false
+        if (stroke.highlighter) h.onStrokeTapped(this, pageIndex, stroke)
+        else h.onGroupSelected(this, pageIndex, ItemGroup(listOf(stroke)))
+        return true
+    }
+
     private var selDownX = 0f
     private var selDownY = 0f
 
@@ -867,7 +894,10 @@ class PdfPageView(context: Context) : View(context) {
                 selDownX = e.x
                 selDownY = e.y
             }
-            MotionEvent.ACTION_UP -> if (hypot(e.x - selDownX, e.y - selDownY) < touchSlop && editingNote != null) h.onNoteDeselect()
+            MotionEvent.ACTION_UP -> if (hypot(e.x - selDownX, e.y - selDownY) < touchSlop) {
+                val hit = toNormalized(e.x, e.y) && selectItemAt(h, pt[0], pt[1])
+                if (hit) performClick() else if (editingNote != null) h.onNoteDeselect()
+            }
         }
         return true
     }
