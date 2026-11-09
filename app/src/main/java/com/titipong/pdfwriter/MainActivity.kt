@@ -286,6 +286,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        if (isPhone) applyPhoneLayout()
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = getString(R.string.app_name)
         onBackPressedDispatcher.addCallback(this, backCallback)
@@ -377,6 +378,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
+        if (isPhone) {
+            // Less used buttons go into the ⋮ menu on phones.
+            menu.findItem(R.id.action_ocr)?.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+            menu.findItem(R.id.action_bookmark)?.setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        }
         menuBookmark = menu.findItem(R.id.action_bookmark)
         updateBookmarkButton()
         return true
@@ -651,6 +657,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT) View.GONE else View.VISIBLE
         listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
             .forEach { it.visibility = sized }
+        if (isPhone) binding.tvSizeLabel.visibility = View.GONE // no room on phones
         if (hasColors) selectColor(colorIndex)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
@@ -1318,7 +1325,56 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     // ================================================================ saving
 
     private fun setStatus(resId: Int) {
-        if (!isDestroyed) binding.tvSaveState.setText(resId)
+        if (isDestroyed) return
+        // Phones: a short status so the file name keeps its room in the top bar.
+        val short = if (!isPhone) null else when (resId) {
+            R.string.saved_in_pdf -> "✓"
+            R.string.saved_in_app -> "✓ App"
+            R.string.saving -> "…"
+            R.string.save_failed -> "⚠"
+            else -> null
+        }
+        if (short != null) binding.tvSaveState.text = short else binding.tvSaveState.setText(resId)
+    }
+
+    /** Phone-sized screen (narrowest side under 600 dp). Tablets keep the full single-row layout. */
+    private val isPhone: Boolean get() = resources.configuration.smallestScreenWidthDp < 600
+
+    /** Second row of the Annotate tools on phones: colors, eraser mode, size, undo. */
+    private var toolRow2: View? = null
+
+    /**
+     * Phones: the Annotate tools don't fit one row, so colors / size / undo move to a second
+     * (scrollable) row; the mode button and size label get smaller.
+     */
+    private fun applyPhoneLayout() {
+        val d = density
+        val tools = binding.annotateTools
+        val start = tools.indexOfChild(binding.colorRow) - 1 // the divider before the colors
+        if (start < 0) return
+        val moved = (start + 1 until tools.childCount).map { tools.getChildAt(it) }
+        tools.removeViews(start, tools.childCount - start) // also drops that divider
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding((8 * d).toInt(), 0, (8 * d).toInt(), (2 * d).toInt())
+        }
+        moved.forEach { row.addView(it) }
+        val scroller = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        }
+        binding.toolStrip.addView(scroller, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        toolRow2 = scroller
+        binding.tvSizeLabel.visibility = View.GONE
+        binding.btnMode.apply {
+            textSize = 13f
+            minWidth = 0
+            minimumWidth = 0
+            setPadding((10 * d).toInt(), paddingTop, (6 * d).toInt(), paddingBottom)
+        }
     }
 
     private fun markDirty() {
@@ -2168,6 +2224,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnMode.setText(currentMode.label)
         binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
         binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
+        toolRow2?.visibility = binding.annotateTools.visibility
     }
 
     private fun selectHighlightColor(index: Int) {
