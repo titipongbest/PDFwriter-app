@@ -1365,6 +1365,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** Second row of the Annotate tools on phones: colors, eraser mode, size, undo. */
     private var toolRow2: View? = null
+    /** Phones: the scroller holding the first-row Annotate tools. */
+    private var toolsRow1: View? = null
 
     /**
      * Phones: the Annotate tools don't fit one row, so colors / size / undo move to a second
@@ -1391,6 +1393,34 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ))
         toolRow2 = scroller
+
+        // First row: 7 tools + the mode button don't fit a phone at full size: make the tool
+        // buttons a little smaller, and let the row scroll sideways if it still doesn't fit.
+        val btn = (36 * d).toInt()
+        for (i in 0 until tools.childCount) {
+            val c = tools.getChildAt(i)
+            if (c is android.widget.ImageButton) {
+                val lp = c.layoutParams as LinearLayout.LayoutParams
+                lp.width = btn
+                lp.height = btn
+                lp.marginEnd = (2 * d).toInt()
+                c.layoutParams = lp
+                c.setPadding((7 * d).toInt(), (7 * d).toInt(), (7 * d).toInt(), (7 * d).toInt())
+            }
+        }
+        val parent = tools.parent as LinearLayout
+        val index = parent.indexOfChild(tools)
+        val toolsLp = tools.layoutParams as LinearLayout.LayoutParams
+        parent.removeView(tools)
+        tools.layoutParams = android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        val toolScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(tools)
+        }
+        parent.addView(toolScroll, index, LinearLayout.LayoutParams(0, toolsLp.height, 1f))
+        toolsRow1 = toolScroll
         binding.tvSizeLabel.visibility = View.GONE
         binding.btnMode.apply {
             textSize = 13f
@@ -2248,6 +2278,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
         binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
         toolRow2?.visibility = binding.annotateTools.visibility
+        toolsRow1?.visibility = binding.annotateTools.visibility
     }
 
     private fun selectHighlightColor(index: Int) {
