@@ -179,12 +179,6 @@
                 android:contentDescription="@string/tool_select"
                 android:src="@drawable/ic_lasso" />
 
-            <ImageButton
-                android:id="@+id/btnWriteText"
-                style="@style/ToolButton"
-                android:contentDescription="@string/tool_write_text"
-                android:src="@drawable/ic_write_text" />
-
             <View style="@style/ToolDivider" />
 
             <LinearLayout

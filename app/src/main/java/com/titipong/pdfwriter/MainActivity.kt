@@ -488,6 +488,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         currentTool = try {
             DrawTool.valueOf(prefs.getString(PREF_TOOL, DrawTool.PEN.name) ?: DrawTool.PEN.name)
+                .let { if (it == DrawTool.WRITE_TEXT) DrawTool.PEN else it } // tool removed: lasso + "To text"
         } catch (e: IllegalArgumentException) {
             DrawTool.PEN
         }
@@ -513,7 +514,6 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         toolButtons[DrawTool.TEXT] = binding.btnText
         toolButtons[DrawTool.IMAGE] = binding.btnImage
         toolButtons[DrawTool.SELECT] = binding.btnSelect
-        toolButtons[DrawTool.WRITE_TEXT] = binding.btnWriteText
         toolButtons.forEach { (t, v) ->
             v.setOnClickListener {
                 if (t == currentTool && toolOn) {
@@ -670,8 +670,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.colorRow.visibility = if (hasColors) View.VISIBLE else View.GONE
         binding.eraserModeGroup.visibility = if (t == DrawTool.ERASER) View.VISIBLE else View.GONE
         // Pictures have no color or size: resize them with their frame.
-        binding.inkLangGroup.visibility = if (t == DrawTool.WRITE_TEXT) View.VISIBLE else View.GONE
-        if (t == DrawTool.WRITE_TEXT && toolActive) ensureHandwritingModel()
+        // Handwriting language for "To text" (lasso handwriting with the Select tool).
+        binding.inkLangGroup.visibility = if (t == DrawTool.SELECT) View.VISIBLE else View.GONE
         val sized = if (t == DrawTool.IMAGE || t == DrawTool.SELECT || t == DrawTool.WRITE_TEXT) View.GONE else View.VISIBLE
         listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
             .forEach { it.visibility = sized }
