@@ -16,7 +16,17 @@ class PageLayoutManager(context: Context, orientation: Int) :
 
     override fun measureChildWithMargins(child: View, widthUsed: Int, heightUsed: Int) {
         if (orientation != VERTICAL) {
-            super.measureChildWithMargins(child, widthUsed, heightUsed)
+            // Horizontal paging: a page is always one screen wide. The list adds right padding
+            // while zoomed (to reach the last page); it must not shrink the pages, or zooming a
+            // double-page spread squeezed and shifted it.
+            val lp = child.layoutParams as RecyclerView.LayoutParams
+            val w = (width - paddingLeft - lp.leftMargin - lp.rightMargin).coerceAtLeast(0)
+            val hSpec = getChildMeasureSpec(
+                height, heightMode,
+                paddingTop + paddingBottom + lp.topMargin + lp.bottomMargin + heightUsed,
+                lp.height, canScrollVertically()
+            )
+            child.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), hSpec)
             return
         }
         val lp = child.layoutParams as RecyclerView.LayoutParams
