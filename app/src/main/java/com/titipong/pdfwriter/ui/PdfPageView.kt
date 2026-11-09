@@ -656,7 +656,7 @@ class PdfPageView(context: Context) : View(context) {
                 when (mode) {
                     Mode.INK -> {
                         appendPoints(e)
-                        if (!highlighterTap(h)) {
+                        if (!highlighterTap(h) && !writeTap(h)) {
                             if (editingNote != null) h.onNoteDeselect()
                             commitStroke(h)
                         }
@@ -681,6 +681,7 @@ class PdfPageView(context: Context) : View(context) {
     private fun onFinger(e: MotionEvent, h: Host): Boolean {
         if (h.tool == DrawTool.HIGHLIGHTER && h.toolActive) return onFingerHighlighter(e, h)
         if (h.tool == DrawTool.SELECT && h.toolActive) return onFingerSelect(e, h)
+        if (h.tool == DrawTool.WRITE_TEXT && h.toolActive) return onFingerWrite(e, h)
         val placing = h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE
         if (!placing || !h.toolActive) return false // let the list scroll
         if (noteDrag(e, h)) return true
@@ -728,6 +729,25 @@ class PdfPageView(context: Context) : View(context) {
         if (hit == null && editingNote == null) return false
         active = null
         if (hit != null) h.onStrokeTapped(this, pageIndex, hit) else h.onNoteDeselect()
+        return true
+    }
+
+    /**
+     * Write to text: a tap (not writing) on a text box selects it (frame: move, resize, edit, color);
+     * a tap elsewhere with something selected unselects it. The tap leaves no ink.
+     */
+    private fun writeTap(h: Host): Boolean {
+        if (!handwriting) return false
+        val st = active ?: return false
+        if (st.points.isEmpty()) return false
+        val xs = st.points.map { it.x }
+        val ys = st.points.map { it.y }
+        if ((xs.max() - xs.min()) * pageScale > touchSlop || (ys.max() - ys.min()) * pageScale > touchSlop) return false
+        val p = st.points.first()
+        val hit = textAt(p.x, p.y)
+        if (hit == null && editingNote == null) return false
+        active = null
+        if (hit != null) h.onTextTapped(this, pageIndex, hit) else h.onNoteDeselect()
         return true
     }
 
@@ -810,6 +830,30 @@ class PdfPageView(context: Context) : View(context) {
         } else {
             h.onGroupSelected(this, pageIndex, ItemGroup(picked))
         }
+    }
+
+    private var wrDownX = 0f
+    private var wrDownY = 0f
+
+    /** Finger with Write to text (not drawing with fingers): tap a text box to select it, drag it, else scroll. */
+    private fun onFingerWrite(e: MotionEvent, h: Host): Boolean {
+        if (noteDrag(e, h)) return true
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                wrDownX = e.x
+                wrDownY = e.y
+            }
+            MotionEvent.ACTION_UP -> if (hypot(e.x - wrDownX, e.y - wrDownY) < touchSlop && toNormalized(e.x, e.y)) {
+                val hit = textAt(pt[0], pt[1])
+                if (hit != null) {
+                    performClick()
+                    h.onTextTapped(this, pageIndex, hit)
+                } else if (editingNote != null) {
+                    h.onNoteDeselect()
+                }
+            }
+        }
+        return true
     }
 
     private var selDownX = 0f
@@ -1448,6 +1492,8 @@ class PdfPageView(context: Context) : View(context) {
         fun pressureScale(p: Float): Float = 0.4f + p.coerceIn(0f, 1f) * 1.2f
 
         /** Tools whose items can be selected and dragged with a frame. */
-        private val DRAGGABLE_TOOLS = setOf(DrawTool.TEXT, DrawTool.IMAGE, DrawTool.HIGHLIGHTER, DrawTool.SELECT)
+        private val DRAGGABLE_TOOLS = setOf(
+            DrawTool.TEXT, DrawTool.IMAGE, DrawTool.HIGHLIGHTER, DrawTool.SELECT, DrawTool.WRITE_TEXT
+        )
     }
 }

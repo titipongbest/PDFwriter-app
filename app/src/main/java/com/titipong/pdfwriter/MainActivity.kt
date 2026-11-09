@@ -2399,7 +2399,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.btnSelCopy.visibility = View.GONE
         binding.btnSelHighlight.visibility = View.GONE
         binding.btnSelUnderline.visibility = View.GONE
-        binding.btnHlRecolor.visibility = View.GONE
+        binding.btnHlRecolor.visibility = View.VISIBLE // quick color change
         binding.btnNoteEdit.visibility = View.VISIBLE
         binding.btnHlDelete.visibility = View.VISIBLE
         showBarAt(view, listOf(view.textBox(note)))
@@ -2866,6 +2866,21 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     /** Pick any color for a highlight / underline that's already on the page. */
     private fun recolorTappedMarkup() {
+        tappedNote?.let { (page, note) ->
+            val view = noteView
+            ColorPicker.show(this, note.color) { picked ->
+                val list = pages[page]?.texts ?: return@show
+                val i = list.indexOf(note)
+                if (i < 0) return@show
+                val recolored = note.copy(color = picked)
+                list[i] = recolored
+                history.addLast(page to NoteEdit(note, recolored))
+                adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+                markDirty()
+                if (view != null) onTextTapped(view, page, recolored)
+            }
+            return
+        }
         tappedStroke?.let { (page, stroke) ->
             val view = noteView
             ColorPicker.show(this, stroke.color) { picked ->
