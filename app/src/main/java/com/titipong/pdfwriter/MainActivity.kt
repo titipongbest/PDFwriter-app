@@ -143,7 +143,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     // Saving: an in-app copy right away, the PDF file itself a moment later.
     private var dirty = false
-    private var saveSeq = 0L
+    /**
+     * Order of in-app saves. Kept for the whole app process (not per screen): after leaving with
+     * Back and coming back, a new screen must not restart at 0, or every save would be skipped as
+     * "older than the last one written".
+     */
+    private var saveSeq: Long
+        get() = SaveSeq.value
+        set(v) { SaveSeq.value = v }
     private var saveJob: Job? = null
     private var changeVersion = 0L
     private var pdfSavedVersion = 0L
@@ -246,7 +253,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             try {
                 AnnotationStorage.save(
                     applicationContext, AnnotationStorage.keyFor(uri.toString()),
-                    AnnotationStorage.toJson(pages, bookmarks, synced = false), 0
+                    AnnotationStorage.toJson(pages, bookmarks, synced = false), ++saveSeq
                 )
             } catch (e: Exception) { }
             tabs.removeAll { it.uri == old.toString() }
@@ -2026,7 +2033,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 side = AnnotationStorage.load(applicationContext, other)
                 side?.let { sd ->
                     try {
-                        AnnotationStorage.save(applicationContext, key, AnnotationStorage.toJson(sd.pages, sd.bookmarks, sd.synced), 0)
+                        AnnotationStorage.save(applicationContext, key, AnnotationStorage.toJson(sd.pages, sd.bookmarks, sd.synced), ++saveSeq)
                     } catch (e: Exception) { }
                 }
             }
@@ -3737,4 +3744,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             Color.parseColor("#F59E0B")
         )
     }
+}
+
+/** See [MainActivity.saveSeq]. */
+private object SaveSeq {
+    @Volatile var value = System.currentTimeMillis()
 }
