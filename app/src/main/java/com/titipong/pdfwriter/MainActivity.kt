@@ -3417,15 +3417,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 if (e != null) withContext(Dispatchers.Default) { e.close() }
                 dialog.dismiss()
             }
-            if (cancelled) {
-                // Cancel = nothing changes in the file.
-                Toast.makeText(this@MainActivity, R.string.ocr_cancelled, Toast.LENGTH_SHORT).show()
-                return@launch
-            }
             if (results.isEmpty()) {
-                Toast.makeText(this@MainActivity, R.string.ocr_nothing_found, Toast.LENGTH_LONG).show()
+                if (!cancelled) Toast.makeText(this@MainActivity, R.string.ocr_nothing_found, Toast.LENGTH_LONG).show()
                 return@launch
             }
+            // Cancel stops reading; the pages read so far are still saved into the file.
             val change = sameLayoutChange(
                 transform = { s, o -> PdfAnnotationIO.addTextLayer(s, results, o) },
                 ok = R.string.ocr_done,
