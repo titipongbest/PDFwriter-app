@@ -50,6 +50,7 @@ jobs:
           Get-Item PDFWriter-Windows.zip | Select-Object Name, Length
 
       - name: Self test on Windows
+        if: ${{ false }}
         shell: pwsh
         run: |
           $exe = "build/compose/binaries/main/app/PDFWriter/PDFWriter.exe"

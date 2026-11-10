@@ -66,7 +66,7 @@ import com.titipong.pdfwriter.Prefs
 import com.titipong.pdfwriter.model.DrawTool
 import kotlinx.coroutines.launch
 
-const val APP_VERSION = "1.6"
+const val APP_VERSION = "1.7"
 
 @Composable
 fun App(app: AppState) {

@@ -211,6 +211,7 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
     }
 
     val drawingTool = app.annotate && app.toolActive && app.tool in setOf(DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.ERASER)
+    val toolIcon = toolPointer(app.tool)
     Box(
         Modifier.size(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
             .background(paperColor(app))
@@ -224,8 +225,9 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
             }
             .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { if (overText) overText = false }
             .pointerHoverIcon(
-                if (drawingTool) PointerIcon.Crosshair
-                else if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
+                if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
+                else if (app.annotate && app.toolActive && toolIcon != null) toolIcon
+                else if (drawingTool) PointerIcon.Crosshair
                 else if (!app.annotate && overText) PointerIcon.Text
                 else PointerIcon.Default
             )
