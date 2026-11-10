@@ -66,6 +66,11 @@ jobs:
           $gr = [System.Drawing.Graphics]::FromImage($bmp)
           $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $bmp.Save("$PWD/screenshot.png")
+          $small = New-Object System.Drawing.Bitmap $bmp, ([int]($b.Width / 2)), ([int]($b.Height / 2))
+          $small.Save("$PWD/shot-small.png")
+          "SHOT-BEGIN"
+          [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD/shot-small.png"))
+          "SHOT-END"
           "app running: $(-not $p2.HasExited)"
           if (-not $p2.HasExited) { Stop-Process $p2 -Force }
         continue-on-error: true

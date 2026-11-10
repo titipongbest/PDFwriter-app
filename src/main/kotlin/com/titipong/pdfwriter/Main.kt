@@ -34,6 +34,7 @@ import java.awt.dnd.DropTargetDropEvent
 import java.io.File
 
 private fun prepareFiles() {
+    try { com.titipong.pdfwriter.pdf.QuickFonts.install() } catch (e: Throwable) { }
     PdfAnnotationIO.imagesDir = AppDirs.images
     try {
         val font = File(AppDirs.data, "fonts/NotoSansThai-Regular.ttf")
