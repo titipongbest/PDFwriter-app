@@ -65,7 +65,20 @@ jobs:
           $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
           $gr = [System.Drawing.Graphics]::FromImage($bmp)
           $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-          $bmp.Save("$PWD/screenshot.png")
+          # Draw a zigzag with the pen (mouse), then look again.
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class M {
+            [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+            [DllImport("user32.dll")] public static extern void mouse_event(int f, int x, int y, int d, int e);
+          }
+          "@
+          [M]::SetCursorPos(400, 450); Start-Sleep -Milliseconds 300
+          [M]::mouse_event(2, 0, 0, 0, 0)
+          for ($i = 0; $i -le 40; $i++) { [M]::SetCursorPos(400 + $i * 6, 450 + (($i % 8) - 4) * 8); Start-Sleep -Milliseconds 15 }
+          [M]::mouse_event(4, 0, 0, 0, 0)
+          Start-Sleep -Seconds 3
+          $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $small = New-Object System.Drawing.Bitmap $bmp, ([int]($b.Width / 2)), ([int]($b.Height / 2))
           $small.Save("$PWD/shot-small.png")
           "SHOT-BEGIN"
