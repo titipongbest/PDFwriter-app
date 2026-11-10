@@ -431,9 +431,12 @@ class AppState(val scope: CoroutineScope) {
                 Prefs.put("meta_${doc.key}", meta(doc.file))
                 true
             } catch (e: Throwable) {
+                logError("save ${doc.file}", e)
+                if (PdfAnnotationIO.lastError == null) PdfAnnotationIO.lastError = "${e.javaClass.simpleName}: ${e.message}"
                 false
             }
         }
+        if (!ok) toast("Couldn't save into the file: " + (PdfAnnotationIO.lastError ?: "see log") + ". Your work is kept in the app.")
         doc.saving = doc.dirty
         doc.savedToPdf = ok
         doc.saveFailed = !ok
@@ -964,4 +967,13 @@ class AppState(val scope: CoroutineScope) {
             Color.parseColor("#F9A8D4"), Color.parseColor("#FDBA74")
         )
     }
+}
+
+/** Appends an error to %APPDATA%\PDFWriter\log.txt (to find out why something failed). */
+fun logError(what: String, e: Throwable) {
+    try {
+        val f = File(AppDirs.data, "log.txt")
+        if (f.length() > 1_000_000) f.delete()
+        f.appendText("${java.time.LocalDateTime.now()} $what\n${e.stackTraceToString().take(4000)}\n\n")
+    } catch (t: Throwable) { }
 }

@@ -374,18 +374,57 @@ object PdfAnnotationIO {
         dropFileOutline: Boolean = false
     ) = writeLock.withLock {
         withContext(Dispatchers.IO) {
-            val tmp = File(dest.parentFile, "." + dest.name + ".pdfwriter.tmp")
-            buildInto(source, pages, bookmarks, tmp, flatten, dropFileOutline)
+            // Built in the app's own folder (some folders don't let apps create extra files),
+            // then put in place: atomic move next to the file if possible, else copy over it.
+            val dir = File(System.getenv("APPDATA") ?: System.getProperty("user.home"), "PDFWriter/cache").apply { mkdirs() }
+            val built = File(dir, "save-" + System.nanoTime() + ".pdf")
+            lastError = null
             try {
-                java.nio.file.Files.move(
-                    tmp.toPath(), dest.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE
-                )
-            } catch (e: Exception) {
-                java.nio.file.Files.move(tmp.toPath(), dest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                buildInto(source, pages, bookmarks, built, flatten, dropFileOutline)
+                val errors = ArrayList<String>()
+                fun attempt(name: String, block: () -> Unit): Boolean = try { block(); true } catch (e: Exception) {
+                    errors.add("$name: ${e.javaClass.simpleName} ${e.message ?: ""}".trim()); false
+                }
+                val sibling = File(dest.parentFile, "." + dest.name + ".pdfwriter.tmp")
+                val done = attempt("move") {
+                    java.nio.file.Files.copy(built.toPath(), sibling.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    try {
+                        java.nio.file.Files.move(sibling.toPath(), dest.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                    } catch (e: Exception) {
+                        sibling.delete()
+                        throw e
+                    }
+                } || attempt("copy") {
+                    java.nio.file.Files.copy(built.toPath(), dest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                } || attempt("write") {
+                    java.io.RandomAccessFile(dest, "rw").use { raf ->
+                        raf.setLength(0)
+                        built.inputStream().use { input ->
+                            val buf = ByteArray(1 shl 16)
+                            while (true) { val n = input.read(buf); if (n < 0) break; raf.write(buf, 0, n) }
+                        }
+                    }
+                }
+                if (!done) {
+                    lastError = when {
+                        !dest.canWrite() -> "The file is read-only"
+                        errors.any { "being used by another process" in it || "AccessDenied" in it } ->
+                            "The file is open in another program (or the folder is protected)"
+                        else -> errors.lastOrNull() ?: "unknown error"
+                    }
+                    throw java.io.IOException(lastError + " | " + errors.joinToString("; "))
+                }
+                lastError = null
+            } finally {
+                built.delete()
             }
         }
     }
+
+    /** Why the last save into the file failed (shown to the person), null after a good save. */
+    @Volatile
+    var lastError: String? = null
 
     /** Same as [write], into a local file. */
     suspend fun writeFile(
