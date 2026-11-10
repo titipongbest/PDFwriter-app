@@ -195,7 +195,8 @@ fun DocumentViewer(app: AppState, doc: DocState) {
 
         // Middle button (wheel press) held: drag the pages, anywhere in the viewer, any mode / tool.
         var panning by remember { androidx.compose.runtime.mutableStateOf(false) }
-        val middlePan = Modifier.pointerInput(onPan) {
+        val panNow by androidx.compose.runtime.rememberUpdatedState(onPan)
+        val middlePan = Modifier.pointerInput(doc) {
             awaitPointerEventScope {
                 while (true) {
                     val ev = awaitPointerEvent(PointerEventPass.Initial)
@@ -208,7 +209,7 @@ fun DocumentViewer(app: AppState, doc: DocState) {
                         val ch = e.changes.firstOrNull() ?: break
                         val d = ch.position - last
                         last = ch.position
-                        if (d != Offset.Zero) onPan(d)
+                        if (d != Offset.Zero) panNow(d)
                         e.changes.forEach { it.consume() }
                         if (!e.buttons.isTertiaryPressed) break
                     }
