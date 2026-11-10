@@ -249,6 +249,33 @@ class PdfPageView(context: Context) : View(context) {
 
     private var inkCache: Bitmap? = null
     private var inkDirty = true
+    /** Part of the page whose ink changed (normalized), redrawn alone instead of the whole page. */
+    private var inkDirtyRect: RectF? = null
+    /** Ink was erased in the gesture going on (saved once, when it ends). */
+    private var erasedInGesture = false
+    /** Bounds of each stroke (cached), to skip strokes far from the eraser quickly. */
+    private val strokeBoxes = java.util.IdentityHashMap<InkStroke, RectF>()
+
+    private fun boxOf(st: InkStroke): RectF = strokeBoxes.getOrPut(st) {
+        val pts = st.points
+        if (pts.isEmpty()) RectF() else {
+            val r = RectF(pts[0].x, pts[0].y, pts[0].x, pts[0].y)
+            for (p in pts) r.union(p.x, p.y)
+            val w = st.width
+            r.inset(-w, -w)
+            r
+        }
+    }
+
+    private fun near(st: InkStroke, x: Float, y: Float, reach: Float): Boolean {
+        val b = boxOf(st)
+        return x >= b.left - reach && x <= b.right + reach && y >= b.top - reach && y <= b.bottom + reach
+    }
+
+    private fun markInkChanged(r: RectF) {
+        if (inkDirty) return
+        inkDirtyRect = inkDirtyRect?.apply { union(r) } ?: RectF(r)
+    }
 
     private var mode = Mode.NONE
     private var active: InkStroke? = null
@@ -533,11 +560,24 @@ class PdfPageView(context: Context) : View(context) {
             c.concat(toView)
             renderAnnotations(c, a, pageScale, null)
             inkDirty = false
+            inkDirtyRect = null
+        } else {
+            val r = inkDirtyRect
+            if (r != null) {
+                // Only where ink was erased: clear that area and draw what's left there.
+                inkDirtyRect = null
+                val s = pageScale
+                val c = Canvas(target)
+                c.concat(toView)
+                c.clipRect(r.left * s - 2f, r.top * s - 2f, r.right * s + 2f, r.bottom * s + 2f)
+                c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+                renderAnnotations(c, a, s, null, r)
+            }
         }
         return target
     }
 
-    private fun renderAnnotations(canvas: Canvas, a: PageAnnotations, s: Float, filter: ColorFilter?) {
+    private fun renderAnnotations(canvas: Canvas, a: PageAnnotations, s: Float, filter: ColorFilter?, region: RectF? = null) {
         // Pictures first, so ink and notes go on top of them.
         for (im in a.images) {
             val bmp = ImageCache.get(im.file) ?: continue
@@ -545,7 +585,10 @@ class PdfPageView(context: Context) : View(context) {
             imagePaint.colorFilter = filter
             canvas.drawBitmap(bmp, null, imageDst, imagePaint)
         }
-        for (st in a.strokes) drawStroke(canvas, st, s, filter)
+        for (st in a.strokes) {
+            if (region != null && !RectF.intersects(region, boxOf(st))) continue
+            drawStroke(canvas, st, s, filter)
+        }
         textPaint.colorFilter = filter
         for (t in a.texts) {
             val lines = layoutText(t)
@@ -579,6 +622,17 @@ class PdfPageView(context: Context) : View(context) {
             if (pts.size == 1) {
                 inkPaint.strokeWidth = st.width * s * pressureScale(pts[0].pressure)
                 canvas.drawPoint(pts[0].x * s, pts[0].y * s, inkPaint)
+                return
+            }
+            val p0 = pts[0].pressure
+            if (pts.all { it.pressure == p0 }) {
+                // Even line: one path (much faster than a line per segment).
+                inkPaint.strokeWidth = st.width * s * pressureScale(p0)
+                inkPaint.strokeJoin = Paint.Join.ROUND
+                path.reset()
+                path.moveTo(pts[0].x * s, pts[0].y * s)
+                for (i in 1 until pts.size) path.lineTo(pts[i].x * s, pts[i].y * s)
+                canvas.drawPath(path, inkPaint)
                 return
             }
             // Per-segment width follows pen pressure.
@@ -1446,17 +1500,19 @@ class PdfPageView(context: Context) : View(context) {
         // highlighter line has just its two ends, so touching its middle used to miss).
         val strokesRemoved = if (h.eraserPixelMode) erasePixels(a, x, y, rn) else a.strokes.removeAll { st ->
             val reach = rn + st.width / 2f
+            if (!near(st, x, y, reach)) return@removeAll false
             val pts = st.points
-            pts.any { p -> hypot(p.x - x, p.y - y) < reach } ||
+            val hit = pts.any { p -> hypot(p.x - x, p.y - y) < reach } ||
                 (1 until pts.size).any { segDist(pts[it - 1], pts[it], x, y) < reach }
+            if (hit) markInkChanged(boxOf(st))
+            hit
         }
         // The eraser only removes pen / highlighter ink. Text notes and text highlights / underlines
         // are deleted by tapping them (text tool / view mode).
         if (strokesRemoved) {
             (editingNote as? InkStroke)?.let { if (it !in a.strokes) h.onNoteDeselect() }
             (editingNote as? ItemGroup)?.let { g -> if (g.items.any { it is InkStroke && it !in a.strokes }) h.onNoteDeselect() }
-            inkDirty = true
-            h.onItemsErased(pageIndex)
+            erasedInGesture = true // saved once, when the eraser lifts
         }
     }
 
@@ -1470,13 +1526,14 @@ class PdfPageView(context: Context) : View(context) {
         for (st in a.strokes) {
             val reach = rn + st.width / 2f
             val pts = st.points
-            if (pts.none { hypot(it.x - x, it.y - y) < reach } &&
+            if (!near(st, x, y, reach) || pts.none { hypot(it.x - x, it.y - y) < reach } &&
                 (1 until pts.size).none { segDist(pts[it - 1], pts[it], x, y) < reach }
             ) {
                 out.add(st)
                 continue
             }
             changed = true
+            markInkChanged(boxOf(st))
             var run = ArrayList<StrokePoint>()
             for (i in pts.indices) {
                 val p = pts[i]
@@ -1551,6 +1608,11 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     private fun endGesture() {
+        if (erasedInGesture) {
+            erasedInGesture = false
+            host?.onItemsErased(pageIndex)
+        }
+        if (strokeBoxes.size > 4000) strokeBoxes.clear()
         mode = Mode.NONE
         parent?.requestDisallowInterceptTouchEvent(false)
         invalidate()
