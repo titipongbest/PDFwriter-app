@@ -50,6 +50,10 @@ private fun prepareFiles() {
 fun main(args: Array<String>) {
     System.setProperty("sun.java2d.uiScale.enabled", "true")
     prepareFiles()
+    if (args.size >= 2 && args[0] == "--selftest") {
+        SelfTest.run(File(args[1]))
+        kotlin.system.exitProcess(0)
+    }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     val app = AppState(scope)
     app.restoreTabs()

@@ -49,6 +49,34 @@ jobs:
           Compress-Archive -Path $app -DestinationPath PDFWriter-Windows.zip -CompressionLevel Optimal
           Get-Item PDFWriter-Windows.zip | Select-Object Name, Length
 
+      - name: Self test on Windows
+        shell: pwsh
+        run: |
+          $exe = "build/compose/binaries/main/app/PDFWriter/PDFWriter.exe"
+          $rep = "$PWD/selftest.txt"
+          $p = Start-Process $exe -ArgumentList "--selftest", "`"$rep`"" -PassThru
+          $p.WaitForExit(180000) | Out-Null
+          if (Test-Path $rep) { Get-Content $rep -Encoding UTF8 } else { "no report" }
+          # The app with a file open, for a screenshot.
+          $p2 = Start-Process $exe -ArgumentList "`"$env:APPDATA\PDFWriter\cache\selftest\annotated.pdf`"" -PassThru
+          Start-Sleep -Seconds 25
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $gr = [System.Drawing.Graphics]::FromImage($bmp)
+          $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$PWD/screenshot.png")
+          "app running: $(-not $p2.HasExited)"
+          if (-not $p2.HasExited) { Stop-Process $p2 -Force }
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: selftest
+          path: |
+            selftest.txt
+            screenshot.png
+
       - uses: actions/upload-artifact@v4
         with:
           name: PDFWriter-Windows
