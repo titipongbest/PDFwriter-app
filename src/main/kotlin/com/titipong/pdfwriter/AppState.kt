@@ -296,12 +296,14 @@ class AppState(val scope: CoroutineScope) {
 
     // ---------------------------------------------------------------- opening / tabs
 
-    fun restoreTabs() {
+    /** Reopens the last session's tabs, then [thenOpen] (files given when starting the app), shown last. */
+    fun restoreTabs(thenOpen: List<File> = emptyList()) {
         val files = Prefs.getStringList("tabs").map { File(it) }.filter { it.exists() }
         val currentPath = Prefs.getString("current_tab")
         scope.launch {
             for (f in files) open(f, select = f.absolutePath == currentPath || files.size == 1)
             if (current == null) docs.firstOrNull()?.let { current = it }
+            for (f in thenOpen) open(f)
         }
     }
 
