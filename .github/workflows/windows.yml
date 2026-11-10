@@ -57,6 +57,13 @@ jobs:
           $p = Start-Process $exe -ArgumentList "--selftest", "`"$rep`"" -PassThru
           $p.WaitForExit(180000) | Out-Null
           if (Test-Path $rep) { Get-Content $rep -Encoding UTF8 } else { "no report" }
+          # Open, add text, quit; then start again and check.
+          $doc = "$env:USERPROFILE\Documents\flow-test.pdf"
+          Copy-Item "$env:APPDATA\PDFWriter\cache\selftest\new.pdf" $doc
+          $flow = "$PWD/flow.txt"
+          Start-Process $exe -ArgumentList "--flowtest", "A", "`"$doc`"", "`"$flow`"" -Wait
+          Start-Process $exe -ArgumentList "--flowtest", "B", "`"$doc`"", "`"$flow`"" -Wait
+          if (Test-Path $flow) { Get-Content $flow -Encoding UTF8 } else { "no flow report" }
           # The app with a file open, for a screenshot.
           $p2 = Start-Process $exe -ArgumentList "`"$env:APPDATA\PDFWriter\cache\selftest\annotated.pdf`"" -PassThru
           Start-Sleep -Seconds 25

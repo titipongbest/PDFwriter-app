@@ -78,4 +78,40 @@ object SelfTest {
         }
         log("DONE")
     }
+
+    /** Like a person: open, add text, close the app (phase A); start again and look (phase B). */
+    fun flow(phase: String, pdf: File, report: File) {
+        val out = StringBuilder()
+        fun log(x: String) { out.appendLine(x); report.appendText(x + "\n") }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+        val app = AppState(scope)
+        try {
+            if (phase == "A") {
+                runBlocking(kotlinx.coroutines.Dispatchers.Main) { app.open(pdf) }
+                val doc = app.current ?: run { log("A: open failed"); return }
+                app.annotate = true
+                app.selectTool(com.titipong.pdfwriter.model.DrawTool.TEXT)
+                runBlocking(kotlinx.coroutines.Dispatchers.Main) {
+                    app.addText(doc, 0, 0.2f, 0.3f, "ข้อความทดสอบ Test")
+                    doc.annotationsFor(0).strokes.add(InkStroke(mutableListOf(StrokePoint(0.1f, 0.1f, 0.5f), StrokePoint(0.4f, 0.2f, 0.5f)), Color.BLACK, 0.003f, false))
+                    app.onItemAdded(doc, 0, doc.annotationsFor(0).strokes.last())
+                }
+                log("A: texts=${doc.pages[0]?.texts?.size} dirty=${doc.dirty}")
+                kotlinx.coroutines.runBlocking { kotlinx.coroutines.delay(300) }
+                javax.swing.SwingUtilities.invokeAndWait { app.saveAllBlocking() }
+                log("A: after save saving=${doc.saving} failed=${doc.saveFailed} file=${pdf.length()}")
+                val back = PdfAnnotationIO.read(pdf)
+                log("A: in the PDF file: texts=${back.pages[0]?.texts?.size} strokes=${back.pages[0]?.strokes?.size}")
+            } else {
+                app.restoreTabs()
+                var waited = 0
+                while (app.current == null && waited < 200) { Thread.sleep(100); waited++ }
+                val doc = app.current
+                log("B: tabs=${app.docs.size} current=${doc?.file}")
+                log("B: texts=${doc?.pages?.get(0)?.texts?.map { it.text }} strokes=${doc?.pages?.get(0)?.strokes?.size}")
+            }
+        } catch (e: Throwable) {
+            log("$phase: ERROR ${e}\n" + e.stackTrace.take(8).joinToString("\n"))
+        }
+    }
 }

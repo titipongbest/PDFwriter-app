@@ -51,6 +51,11 @@ private fun prepareFiles() {
 fun main(args: Array<String>) {
     System.setProperty("sun.java2d.uiScale.enabled", "true")
     prepareFiles()
+    if (args.size >= 4 && args[0] == "--flowtest") {
+        SelfTest.flow(args[1], File(args[2]), File(args[3]))
+        Prefs.flush()
+        kotlin.system.exitProcess(0)
+    }
     if (args.size >= 2 && args[0] == "--selftest") {
         SelfTest.run(File(args[1]))
         kotlin.system.exitProcess(0)
