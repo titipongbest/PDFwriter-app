@@ -514,7 +514,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             ts.colorIndex = if (ts.palette.isEmpty()) 0 else idx.coerceIn(0, ts.palette.size - 1)
             val size = if (prefs.contains(k + "size")) prefs.getInt(k + "size", ts.sizeTenths)
             else if (t == DrawTool.PEN) prefs.getInt(PREF_SIZE_TENTHS, ts.sizeTenths) else ts.sizeTenths
-            ts.sizeTenths = size.coerceIn(1, 100)
+            ts.sizeTenths = size.coerceIn(1, MAX_SIZE_TENTHS)
         }
         currentTool = try {
             DrawTool.valueOf(prefs.getString(PREF_TOOL, DrawTool.PEN.name) ?: DrawTool.PEN.name)
@@ -605,7 +605,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
 
         // Size: 0.1 .. 10.0 in steps of 0.1
-        binding.seekSize.max = 99
+        binding.seekSize.max = MAX_SIZE_TENTHS - 1
         binding.seekSize.progress = sizeTenths - 1
         binding.seekSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -651,7 +651,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     private fun setSize(tenths: Int) {
-        sizeTenths = tenths.coerceIn(1, 100)
+        sizeTenths = tenths.coerceIn(1, MAX_SIZE_TENTHS)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
         saveToolPrefs()
@@ -3038,7 +3038,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         clearSelection()
         var color = note.color
         // Same 0.1–10.0 scale as the text tool's size.
-        var tenths = Math.round((note.size - 0.018f) / 0.004f * 10f).coerceIn(1, 100)
+        var tenths = Math.round((note.size - 0.018f) / 0.004f * 10f).coerceIn(1, MAX_SIZE_TENTHS)
         fun sizeOf(t: Int) = 0.018f + 0.004f * (t / 10f)
 
         val pad = (20 * density).toInt()
@@ -3696,6 +3696,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     companion object {
+        /** Largest pen / highlighter / eraser / text size (40.0). */
+        const val MAX_SIZE_TENTHS = 400
         private const val PREF_LAST_URI = "last_uri"
         private const val PREF_PALETTE = "palette"
         private const val PREF_COLOR_INDEX = "color_index"
