@@ -29,7 +29,7 @@ object OptionSheet {
         }
         var dialog: AlertDialog? = null
         options.forEachIndexed { i, o ->
-            val shape = GradientDrawable().apply {
+            val cardShape = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
                 setColor(Color.WHITE)
                 setStroke(dp(1), Color.parseColor("#E5E7EB"))
@@ -38,7 +38,7 @@ object OptionSheet {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(14), dp(12), dp(14), dp(12))
-                background = RippleDrawable(ColorStateList.valueOf(Color.parseColor("#1F2563EB")), shape, null)
+                background = RippleDrawable(ColorStateList.valueOf(Color.parseColor("#1F2563EB")), cardShape, null)
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
