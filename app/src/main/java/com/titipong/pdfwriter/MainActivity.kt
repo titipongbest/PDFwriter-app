@@ -2400,6 +2400,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     override fun selectBegin(view: PdfPageView, page: Int, nx: Float, ny: Float, byWord: Boolean): Boolean {
         clearSelection()
         val idx = searchIndex ?: return false
+        // Text boxes (Text tool) can be selected and highlighted like the PDF's text.
+        idx.setNotes(page, view.noteChars())
         if (!idx.isReady(page)) {
             lifecycleScope.launch {
                 try { idx.ensurePage(page) } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) { }
@@ -3415,11 +3417,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 if (e != null) withContext(Dispatchers.Default) { e.close() }
                 dialog.dismiss()
             }
-            if (results.isEmpty()) {
-                if (!cancelled) Toast.makeText(this@MainActivity, R.string.ocr_nothing_found, Toast.LENGTH_LONG).show()
+            if (cancelled) {
+                // Cancel = nothing changes in the file.
+                Toast.makeText(this@MainActivity, R.string.ocr_cancelled, Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            // Save what was read (even if cancelled part-way).
+            if (results.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.ocr_nothing_found, Toast.LENGTH_LONG).show()
+                return@launch
+            }
             val change = sameLayoutChange(
                 transform = { s, o -> PdfAnnotationIO.addTextLayer(s, results, o) },
                 ok = R.string.ocr_done,

@@ -26,6 +26,7 @@
     <string name="saved_in_pdf">✓ Saved to PDF</string>
     <string name="saving_pdf">Saving to PDF…</string>
     <string name="saved_in_app">✓ Saved in app</string>
+    <string name="ocr_cancelled">OCR cancelled — the file was not changed</string>
     <string name="read_only_hint">This file was opened read-only: your changes are kept in the app only. Allow saving into the file?</string>
     <string name="allow_saving">Allow</string>
     <string name="pick_same_file">Choose the same PDF file</string>

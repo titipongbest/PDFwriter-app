@@ -367,6 +367,17 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     /** The note's lines, widths normalized to the page width (same breaking as the PDF writer). */
+    /** This page's text boxes as letters with their boxes (selectable like the PDF's text in view mode). */
+    fun noteChars(): List<Pair<Char, RectF?>> {
+        val a = annotations ?: return emptyList()
+        if (a.texts.isEmpty()) return emptyList()
+        val s = pageScale.coerceAtLeast(1f)
+        return com.titipong.pdfwriter.search.SearchIndex.noteChars(
+            a.texts.toList(), { layoutText(it) }, { t, l -> boxWidth(t, l) },
+            { t, str -> textPaint.textSize = t.size * s; textPaint.measureText(str) / s }
+        )
+    }
+
     private fun layoutText(t: TextNote): List<TextLayout.Line> {
         val s = pageScale.coerceAtLeast(1f)
         textPaint.textSize = t.size * s
