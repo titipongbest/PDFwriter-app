@@ -1155,15 +1155,15 @@ class PdfPageView(context: Context) : View(context) {
      * A lasso selection scaled from corner [corner] of its frame to (x, y), the opposite corner
      * staying put: ink (and its thickness), text boxes (text size, width) and pictures all scale.
      */
+    /** Lasso selection scaled from a corner: width and height follow the finger freely. */
     private fun scaledGroup(g: ItemGroup, corner: Int, x: Float, y: Float): ItemGroup? {
         val f = noteFrame(g) ?: return null
         val (ax, ay) = corners(f)[(corner + 2) % 4]
-        val k = maxOf(
-            kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f),
-            kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)
-        ).coerceIn(0.1f, 10f)
-        fun sx(v: Float) = ax + (v - ax) * k
-        fun sy(v: Float) = ay + (v - ay) * k
+        val kx = (kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f)).coerceIn(0.1f, 10f)
+        val ky = (kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)).coerceIn(0.1f, 10f)
+        val k = kotlin.math.sqrt(kx * ky)
+        fun sx(v: Float) = ax + (v - ax) * kx
+        fun sy(v: Float) = ay + (v - ay) * ky
         return ItemGroup(g.items.map {
             when (it) {
                 is InkStroke -> InkStroke(
@@ -1171,10 +1171,10 @@ class PdfPageView(context: Context) : View(context) {
                     it.color, (it.width * k).coerceIn(0.0005f, 0.2f), it.highlighter
                 )
                 is TextNote -> it.copy(
-                    x = sx(it.x), y = sy(it.y), size = (it.size * k).coerceIn(0.004f, 0.4f),
-                    width = if (it.width > 0f) it.width * k else 0f
+                    x = sx(it.x), y = sy(it.y), size = (it.size * ky).coerceIn(0.004f, 0.4f),
+                    width = if (it.width > 0f) it.width * kx else 0f
                 )
-                is ImageNote -> ImageNote(it.file, sx(it.x), sy(it.y), it.w * k, it.h * k)
+                is ImageNote -> ImageNote(it.file, sx(it.x), sy(it.y), it.w * kx, it.h * ky)
                 else -> it
             }
         })
@@ -1211,8 +1211,11 @@ class PdfPageView(context: Context) : View(context) {
             return ImageNote(orig.file, left, top, w, h)
         }
         if (orig !is TextNote) return null
-        val size = (orig.size * scale).coerceIn(0.006f, 0.4f)
-        val width = if (orig.width > 0f) orig.width * (size / orig.size) else 0f
+        // Text boxes resize freely: across = the box width (the text wraps), up/down = the text size.
+        val kx = (kotlin.math.abs(x - ax) / f.width().coerceAtLeast(1e-4f)).coerceIn(0.1f, 10f)
+        val ky = (kotlin.math.abs(y - ay) / f.height().coerceAtLeast(1e-4f)).coerceIn(0.2f, 8f)
+        val size = (orig.size * ky).coerceIn(0.006f, 0.4f)
+        val width = (boxWidth(orig, layoutText(orig)) * kx).coerceAtLeast(size * 1.5f)
         val trial = orig.copy(size = size, width = width)
         val nf = noteFrame(trial) ?: return null
         val (tx, ty) = corners(nf)[(corner + 2) % 4]
