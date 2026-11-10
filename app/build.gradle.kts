@@ -13,8 +13,8 @@ android {
         applicationId = "com.titipong.pdfwriter"
         minSdk = 26
         targetSdk = 34
-        versionCode = 73
-        versionName = "8.2"
+        versionCode = 74
+        versionName = "8.3"
         // 64-bit ARM only (all current Galaxy tablets/phones): keeps native libraries for other CPUs out of the APK.
         // -PallAbis (timing test on an x86 emulator) keeps every CPU type.
         if (!project.hasProperty("allAbis")) ndk { abiFilters += listOf("arm64-v8a") }

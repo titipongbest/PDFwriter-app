@@ -1069,6 +1069,9 @@ class PdfPageView(context: Context) : View(context) {
                     orig is ItemGroup && dragKind == 1 -> shifted(orig, dx, dy)
                     orig is ItemGroup -> scaledGroup(orig, dragKind - 2, pt[0], pt[1]) ?: return true
                     orig is TextNote && (dragKind == 8 || dragKind == 9) -> widened(orig, dragKind == 8, pt[0])
+                    // A tapped text box resizes from its corners exactly like a lasso selection.
+                    orig is TextNote && dragKind in 2..5 ->
+                        scaledGroup(ItemGroup(listOf(orig)), dragKind - 2, pt[0], pt[1])?.items?.firstOrNull() ?: return true
                     orig is InkStroke && dragKind == 1 ->
                         InkStroke(orig.points.map { StrokePoint(it.x + dx, it.y + dy, it.pressure) }.toMutableList(), orig.color, orig.width, orig.highlighter)
                     orig is InkStroke && dragKind >= 6 -> stretched(orig, dragKind - 6, pt[0], pt[1])
