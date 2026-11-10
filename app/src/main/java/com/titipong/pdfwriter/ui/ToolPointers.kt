@@ -14,20 +14,26 @@ import com.titipong.pdfwriter.model.DrawTool
 /** Mouse / pen hover pointers that show the annotate tool in use (the tool's icon, outlined). */
 object ToolPointers {
     private val cache = HashMap<DrawTool, PointerIcon?>()
+    private val images = HashMap<DrawTool, Triple<Bitmap, Float, Float>?>()
 
     fun forTool(context: Context, tool: DrawTool): PointerIcon? {
         return cache.getOrPut(tool) {
-            if (tool == DrawTool.TEXT) PointerIcon.getSystemIcon(context, PointerIcon.TYPE_TEXT) else make(context, tool)
+            image(context, tool)?.let { (b, x, y) -> PointerIcon.create(b, x, y) }
         }
     }
 
-    private fun make(context: Context, tool: DrawTool): PointerIcon? {
+    /** The tool's pointer picture and its hot spot (the point that touches the page). */
+    fun image(context: Context, tool: DrawTool): Triple<Bitmap, Float, Float>? =
+        images.getOrPut(tool) { try { make(context, tool) } catch (e: Throwable) { null } }
+
+    private fun make(context: Context, tool: DrawTool): Triple<Bitmap, Float, Float>? {
         val res = when (tool) {
             DrawTool.PEN -> R.drawable.ic_pen
             DrawTool.HIGHLIGHTER -> R.drawable.ic_highlight
             DrawTool.ERASER -> R.drawable.ic_eraser
             DrawTool.IMAGE -> R.drawable.ic_image
             DrawTool.SELECT -> R.drawable.ic_lasso
+            DrawTool.TEXT -> R.drawable.ic_text
             else -> return null
         }
         val d = context.resources.displayMetrics.density
@@ -51,6 +57,6 @@ object ToolPointers {
             DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.ERASER -> (pad + size * 0.12f) to (pad + size * 0.88f)
             else -> (full / 2f) to (full / 2f)
         }
-        return PointerIcon.create(bmp, hx, hy)
+        return Triple(bmp, hx, hy)
     }
 }

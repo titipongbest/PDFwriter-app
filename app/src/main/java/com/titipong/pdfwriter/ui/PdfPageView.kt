@@ -533,6 +533,7 @@ class PdfPageView(context: Context) : View(context) {
         }
         if (bookmarked) drawRibbon(canvas, width.toFloat())
         if (mode == Mode.ERASE) canvas.drawCircle(eraserX, eraserY, eraserRadius, eraserPaint)
+        drawPenHover(canvas)
     }
 
     private fun drawRibbon(canvas: Canvas, w: Float) {
@@ -678,10 +679,45 @@ class PdfPageView(context: Context) : View(context) {
         return ToolPointers.forTool(context, h.tool)
     }
 
+    /** S Pen hovering over the page (view px), to draw the tool's picture there; NaN = not hovering. */
+    private var penHoverX = Float.NaN
+    private var penHoverY = Float.NaN
+
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val icon = toolPointer()
         if (icon !== pointerIcon) pointerIcon = icon
+        // The S Pen shows the system's own pointer, not the app's: draw the tool's picture at the pen.
+        val tt = event.getToolType(0)
+        val pen = tt == MotionEvent.TOOL_TYPE_STYLUS || tt == MotionEvent.TOOL_TYPE_ERASER
+        val show = pen && toolPointer() != null && event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
+        if (show) {
+            penHoverX = event.x
+            penHoverY = event.y
+            invalidate()
+        } else if (!penHoverX.isNaN()) {
+            penHoverX = Float.NaN
+            invalidate()
+        }
         return super.onHoverEvent(event)
+    }
+
+    private val hoverRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * resources.displayMetrics.density
+        color = Color.argb(200, 55, 65, 81)
+    }
+
+    private fun drawPenHover(canvas: Canvas) {
+        if (penHoverX.isNaN() || mode != Mode.NONE) return
+        val h = host ?: return
+        if (h.viewMode || !h.toolActive) { penHoverX = Float.NaN; return }
+        if (h.tool == DrawTool.ERASER) {
+            // The eraser's size, where it would erase.
+            val r = max(h.eraserWidth * pageScale * 3f, minEraserPx)
+            canvas.drawCircle(penHoverX, penHoverY, r, hoverRingPaint)
+        }
+        val (bmp, hx, hy) = ToolPointers.image(context, h.tool) ?: return
+        canvas.drawBitmap(bmp, penHoverX - hx, penHoverY - hy, null)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
