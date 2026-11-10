@@ -1415,6 +1415,26 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
      */
     private fun applyPhoneLayout() {
         val d = density
+        // Page editing bar: Cancel / Save don't fit next to "+ Blank page" and "N selected" on a
+        // phone: put them on their own line under it, at the right.
+        (binding.btnApplyEdit.parent as? LinearLayout)?.let { header ->
+            val panel = header.parent as? LinearLayout
+            if (panel != null) {
+                val row2 = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+                    setBackgroundColor(android.graphics.Color.WHITE)
+                    setPadding((8 * d).toInt(), 0, (8 * d).toInt(), 0)
+                }
+                for (v in listOf(binding.btnCancelEdit, binding.btnApplyEdit)) {
+                    header.removeView(v)
+                    row2.addView(v)
+                }
+                panel.addView(row2, panel.indexOfChild(header) + 1, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ))
+            }
+        }
         val tools = binding.annotateTools
         val start = tools.indexOfChild(binding.colorRow) - 1 // the divider before the colors
         if (start < 0) return
