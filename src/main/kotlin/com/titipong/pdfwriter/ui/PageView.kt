@@ -224,13 +224,6 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
                 if (on != overText) overText = on
             }
             .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { if (overText) overText = false }
-            .pointerHoverIcon(
-                if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
-                else if (app.annotate && app.toolActive && toolIcon != null) toolIcon
-                else if (drawingTool) PointerIcon.Crosshair
-                else if (!app.annotate && overText) PointerIcon.Text
-                else PointerIcon.Default
-            )
             .pointerInput(doc, page) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -369,6 +362,16 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
         // Live feedback: the stroke being drawn, selection, lasso, guides, eraser.
         Canvas(Modifier.fillMaxSize()) {
             drawOverlay(app, doc, page, size.width, nt)
+        }
+        // The pointer for the current tool. A fresh layer per tool / mode, so the pointer changes as
+        // soon as the mouse moves (changing the icon of one layer didn't always show).
+        val icon = if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
+            else if (app.annotate && app.toolActive && toolIcon != null) toolIcon
+            else if (drawingTool) PointerIcon.Crosshair
+            else if (!app.annotate && overText) PointerIcon.Text
+            else PointerIcon.Default
+        androidx.compose.runtime.key(icon) {
+            Box(Modifier.fillMaxSize().pointerHoverIcon(icon))
         }
         SelectionPopup(app, doc, page, widthPx)
     }
