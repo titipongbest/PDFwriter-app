@@ -122,7 +122,7 @@ fun Sheet(
 
 @Composable
 private fun Section(text: String) {
-    Text(text, fontSize = 12.sp, color = Ui.SubText, fontFamily = Ui.font, modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+    Text(text, fontSize = 12.sp, color = Ui.SubText, fontFamily = Ui.font, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
 }
 
 @Composable
@@ -136,11 +136,25 @@ private fun SwitchRow(text: String, sub: String? = null, checked: Boolean, onCha
     }
 }
 
+/** One choice as its own card (icon, title, short description), so choices are easy to tell apart. */
 @Composable
-private fun ActionRow(text: String, sub: String? = null, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp)) {
-        Text(text, fontSize = 14.sp, fontFamily = Ui.font, color = Ui.Text)
-        if (sub != null) Text(sub, fontSize = 12.sp, fontFamily = Ui.font, color = Ui.SubText)
+private fun ActionRow(text: String, sub: String? = null, iconName: String? = null, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(RoundedCornerShape(12.dp))
+            .border(1.dp, Ui.BarLine, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (iconName != null) {
+            Box(Modifier.size(38.dp).clip(CircleShape).background(Ui.Selected), contentAlignment = Alignment.Center) {
+                Icon(icon(iconName), null, Modifier.size(20.dp), tint = Ui.Primary)
+            }
+            Spacer(Modifier.width(14.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(text, fontSize = 15.sp, fontFamily = Ui.font, color = Ui.Text, fontWeight = FontWeight.SemiBold)
+            if (sub != null) Text(sub, fontSize = 12.sp, fontFamily = Ui.font, color = Ui.SubText, modifier = Modifier.padding(top = 2.dp))
+        }
     }
 }
 
@@ -348,10 +362,19 @@ private fun PagesDialog(app: AppState, doc: DocState) {
                 Label(if (sel.isEmpty()) "Click to select, Ctrl/Shift for more, double-click to open" else "${sel.size} selected", color = Ui.SubText, size = 12)
             }
             Spacer(Modifier.height(8.dp))
-            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            @Composable
+            fun Group(title: String, content: @Composable () -> Unit) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                    Text(title, Modifier.width(70.dp).padding(top = 7.dp), fontSize = 12.sp, color = Ui.SubText, fontFamily = Ui.font, fontWeight = FontWeight.SemiBold)
+                    androidx.compose.foundation.layout.FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+                }
+            }
+            Group("Select") {
                 Chip("Select all", false) { sel.clear(); sel.addAll(order.indices) }
                 Chip("Clear", false) { sel.clear() }
-                if (!app.extractPick) {
+            }
+            if (!app.extractPick) Group("Edit") {
+                run {
                     Chip("Delete", false) {
                         if (sel.size >= order.size) { app.toast("A file needs at least one page"); return@Chip }
                         val s = sel.toSet(); val keep = order.filterIndexed { i, _ -> i !in s }
@@ -381,6 +404,8 @@ private fun PagesDialog(app: AppState, doc: DocState) {
                         }
                     }
                 }
+            }
+            Group("Extract") {
                 Chip("Extract as PDF", app.extractPick) {
                     val pages = selectedSources()
                     if (pages.isEmpty()) { app.toast("Select pages first"); return@Chip }
@@ -397,6 +422,7 @@ private fun PagesDialog(app: AppState, doc: DocState) {
                     Files.chooseFolder("Folder for the pictures")?.let { app.extractPages(pages, it, "jpg"); close() }
                 }
             }
+            Spacer(Modifier.height(6.dp))
             HorizontalDivider(color = Ui.BarLine)
             var anchor by remember { mutableStateOf(-1) }
             LazyVerticalGrid(GridCells.Adaptive(140.dp), Modifier.weight(1f).fillMaxWidth()) {
@@ -631,14 +657,14 @@ private fun NewPdfDialog(app: AppState) {
 private fun ExportDialog(app: AppState, doc: DocState) {
     val close = { app.showExport = false }
     Sheet("Export", close) {
-        ActionRow("Save a copy", "Annotations stay editable") {
+        ActionRow("Identical copy", "A new PDF; annotations stay editable", "ic_copy") {
             Files.save("Save a copy", "${doc.name}-copy.pdf", "pdf")?.let { app.exportCopy(it, flatten = false) }; close()
         }
-        ActionRow("Save a flattened copy", "Annotations become part of the pages (can't be edited)") {
+        ActionRow("Flattened copy", "Annotations merged into the pages (can't be edited)", "ic_cover") {
             Files.save("Save a flattened copy", "${doc.name}-flat.pdf", "pdf")?.let { app.exportCopy(it, flatten = true) }; close()
         }
-        ActionRow("Extract pages…", "Some pages as a PDF or as pictures") { close(); app.extractPick = true; app.showPages = true }
-        ActionRow("Print…") { close(); app.print() }
+        ActionRow("Extract pages", "Pick pages to save as a PDF or as images", "ic_pages") { close(); app.extractPick = true; app.showPages = true }
+        ActionRow("Print", "Send the file with its annotations to a printer", "ic_print") { close(); app.print() }
         Spacer(Modifier.height(4.dp))
         Text("Your changes are always saved into the original file automatically.", fontSize = 11.sp, color = Ui.SubText, fontFamily = Ui.font)
     }
@@ -651,7 +677,7 @@ private fun OcrDialog(app: AppState) {
         Text("Reads Thai and English text in scanned pages (on this computer, no internet) and adds an invisible text layer, so you can search, select and highlight it.",
             fontSize = 13.sp, fontFamily = Ui.font, color = Ui.SubText)
         Spacer(Modifier.height(8.dp))
-        ActionRow("This page") { close(); app.runOcr(false) }
-        ActionRow("All pages without text") { close(); app.runOcr(true) }
+        ActionRow("This page", "Read the text on the page you are on", "ic_ocr") { close(); app.runOcr(false) }
+        ActionRow("All pages without text", "Pages that already have text are skipped", "ic_pages") { close(); app.runOcr(true) }
     }
 }
