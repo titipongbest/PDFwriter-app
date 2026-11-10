@@ -291,7 +291,7 @@ private fun EditNoteDialog(app: AppState, doc: DocState, page: Int, note: TextNo
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton({ tenths = (tenths - 5).coerceAtLeast(1) }) { Text("−", fontSize = 16.sp) }
             Text(String.format("%.1f", tenths / 10f), fontFamily = Ui.font, modifier = Modifier.width(40.dp))
-            TextButton({ tenths += 5 }) { Text("+", fontSize = 16.sp) }
+            TextButton({ tenths = (tenths + 5).coerceAtMost(400) }) { Text("+", fontSize = 16.sp) }
             Spacer(Modifier.width(16.dp))
             ToolButton("ic_align_left", "Left", align == 0) { align = 0 }
             ToolButton("ic_align_center", "Center", align == 1) { align = 1 }

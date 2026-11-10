@@ -225,7 +225,7 @@ class AppState(val scope: CoroutineScope) {
     fun widthFor(tenths: Int) = 0.0003f + 0.0012f * (tenths / 10f)
     /** Text size (normalized) for a size value in tenths. */
     fun textSizeOf(tenths: Int) = 0.018f + 0.004f * (tenths / 10f)
-    fun tenthsOfTextSize(size: Float) = Math.round((size - 0.018f) / 0.004f * 10f).coerceIn(1, 999)
+    fun tenthsOfTextSize(size: Float) = Math.round((size - 0.018f) / 0.004f * 10f).coerceIn(1, 400)
 
     fun selectTool(t: DrawTool) {
         current?.let { clearSelection(it) }
@@ -246,7 +246,7 @@ class AppState(val scope: CoroutineScope) {
     }
 
     fun setSize(tenths: Int) {
-        setting.sizeTenths = tenths.coerceIn(1, 999)
+        setting.sizeTenths = tenths.coerceIn(1, 400)
         Prefs.put("size_${tool.name}", setting.sizeTenths)
         paletteVersion++
     }
