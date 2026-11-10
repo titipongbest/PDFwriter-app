@@ -63,6 +63,7 @@ fun main(args: Array<String>) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     val app = AppState(scope)
     app.restoreTabs()
+    if ("--view" in args) app.setAnnotateMode(false)
     val startFiles = args.map { File(it) }.filter { it.isFile && it.name.lowercase().endsWith(".pdf") }
     if (startFiles.isNotEmpty()) scope.launch { for (f in startFiles) app.open(f) }
 

@@ -66,7 +66,7 @@ import com.titipong.pdfwriter.Prefs
 import com.titipong.pdfwriter.model.DrawTool
 import kotlinx.coroutines.launch
 
-const val APP_VERSION = "1.1"
+const val APP_VERSION = "1.3"
 
 @Composable
 fun App(app: AppState) {
@@ -320,10 +320,38 @@ private fun ToolRow(app: AppState, doc: DocState) {
 
 @Composable
 private fun SizeControl(app: AppState) {
+    readState(app.paletteVersion, app.tool) // the size isn't a state value itself
     val tenths = app.setting.sizeTenths
-    TextButtonSmall("−") { app.setSize(if (tenths > 10) tenths - 5 else tenths - 1) }
-    Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) { Label(String.format("%.1f", tenths / 10f), size = 13) }
-    TextButtonSmall("+") { app.setSize(if (tenths >= 10) tenths + 5 else tenths + 1) }
+    TextButtonSmall("−", "Smaller") {
+        val t = app.setting.sizeTenths
+        app.setSize(if (t > 10) t - 5 else t - 1)
+    }
+    // Click the number to type an exact size (Enter to apply).
+    var text by remember(tenths) { mutableStateOf(String.format("%.1f", tenths / 10f)) }
+    fun apply() {
+        text.replace(',', '.').toFloatOrNull()?.let { app.setSize(Math.round(it * 10f)) }
+        text = String.format("%.1f", app.setting.sizeTenths / 10f)
+    }
+    Box(
+        Modifier.width(48.dp).height(28.dp).border(1.dp, Ui.BarLine, RoundedCornerShape(6.dp)).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        BasicTextField(
+            text, { v -> text = v.filter { it.isDigit() || it == '.' || it == ',' }.take(5) },
+            Modifier.fillMaxWidth()
+                .onFocusChanged { Keys.typing = it.isFocused; if (!it.isFocused) apply() }
+                .onPreviewKeyEvent { e ->
+                    if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == Key.Enter) { apply(); true } else false
+                },
+            singleLine = true,
+            textStyle = TextStyle(fontSize = 13.sp, fontFamily = Ui.font, color = Ui.Text, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+            cursorBrush = SolidColor(Ui.Primary)
+        )
+    }
+    TextButtonSmall("+", "Bigger") {
+        val t = app.setting.sizeTenths
+        app.setSize(if (t >= 10) t + 5 else t + 1)
+    }
 }
 
 // ===================================================================== search

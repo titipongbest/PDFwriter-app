@@ -92,13 +92,34 @@ jobs:
           [M]::mouse_event(0x40, 0, 0, 0, 0)
           Start-Sleep -Seconds 3
           $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          if (-not $p2.HasExited) { Stop-Process $p2 -Force }
+          Start-Sleep -Seconds 2
+          # View mode: select text by dragging, then press Highlight on the bar.
+          $p3 = Start-Process $exe -ArgumentList "--view", "`"$env:APPDATA\PDFWriter\cache\selftest\text.pdf`"" -PassThru
+          Start-Sleep -Seconds 20
+          [M]::SetCursorPos(360, 218); Start-Sleep -Milliseconds 300
+          [M]::mouse_event(2, 0, 0, 0, 0)
+          for ($i = 0; $i -le 22; $i++) { [M]::SetCursorPos(360 + $i * 10, 218); Start-Sleep -Milliseconds 20 }
+          [M]::mouse_event(4, 0, 0, 0, 0)
+          Start-Sleep -Seconds 2
+          $bmpA = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $gA = [System.Drawing.Graphics]::FromImage($bmpA)
+          $gA.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmpA.Save("$PWD/shotA.png")
+          [M]::SetCursorPos(457, 177); Start-Sleep -Milliseconds 300
+          [M]::mouse_event(2, 0, 0, 0, 0); Start-Sleep -Milliseconds 80; [M]::mouse_event(4, 0, 0, 0, 0)
+          Start-Sleep -Seconds 2
+          $gr.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          "SHOTA-BEGIN"
+          [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD/shotA.png"))
+          "SHOTA-END"
+          if (-not $p3.HasExited) { Stop-Process $p3 -Force }
           $small = New-Object System.Drawing.Bitmap $bmp, ([int]($b.Width / 2)), ([int]($b.Height / 2))
           $small.Save("$PWD/shot-small.png")
           "SHOT-BEGIN"
           [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD/shot-small.png"))
           "SHOT-END"
-          "app running: $(-not $p2.HasExited)"
-          if (-not $p2.HasExited) { Stop-Process $p2 -Force }
+          "done"
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4

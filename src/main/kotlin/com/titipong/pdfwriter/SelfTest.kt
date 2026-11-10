@@ -34,6 +34,26 @@ object SelfTest {
         val dir = File(AppDirs.cache, "selftest").apply { deleteRecursively(); mkdirs() }
         val pdf = File(dir, "new.pdf")
         check("create PDF") { PdfTemplates.create(pdf, PageTemplate.LINED, false, 3); "${pdf.length()} bytes" }
+        check("text PDF") {
+            val f = File(dir, "text.pdf")
+            org.apache.pdfbox.pdmodel.PDDocument().use { d ->
+                val pg = org.apache.pdfbox.pdmodel.PDPage(org.apache.pdfbox.pdmodel.common.PDRectangle.A4)
+                d.addPage(pg)
+                org.apache.pdfbox.pdmodel.PDPageContentStream(d, pg).use { cs ->
+                    cs.beginText()
+                    cs.setFont(org.apache.pdfbox.pdmodel.font.PDType1Font.HELVETICA_BOLD, 40f)
+                    cs.newLineAtOffset(60f, 842f - 140f)
+                    cs.showText("Highlight this line")
+                    cs.newLineAtOffset(0f, -80f)
+                    cs.showText("Underline this one")
+                    cs.endText()
+                }
+                d.save(f)
+            }
+            val idx = com.titipong.pdfwriter.search.SearchIndex(f, 1)
+            runBlocking { idx.ensurePage(0) }
+            "${f.length()} bytes, hasText=${idx.hasText(0)}, char at line 1 = ${idx.charAt(0, 0.2f, 0.19f, 0.01f)}"
+        }
         check("render") {
             val r = PageRenderer.open(pdf, null)
             val img = runBlocking { r.render(0, 1200) }
