@@ -1,0 +1,111 @@
+package com.titipong.pdfwriter.model
+
+enum class DrawTool { PEN, HIGHLIGHTER, ERASER, TEXT, IMAGE, SELECT, WRITE_TEXT }
+
+/**
+ * Highlight opacity is kept in the color's alpha: 255 (opaque, also every older color) means the
+ * default opacity; anything else is the chosen opacity.
+ */
+object Opacity {
+    const val INK_DEFAULT = 0.35f      // highlighter pen (Annotate)
+    const val TEXT_DEFAULT = 0.45f     // text highlight (View)
+    fun of(color: Int, default: Float): Float {
+        val a = (color ushr 24) and 0xFF
+        return if (a == 255) default else a / 255f
+    }
+    /** [color] with opacity [o] (0.1..1) stored in its alpha (never 255, which means "default"). */
+    fun with(color: Int, o: Float): Int {
+        val a = Math.round(o.coerceIn(0.1f, 1f) * 254f)
+        return (color and 0xFFFFFF) or (a shl 24)
+    }
+}
+
+/** Several items picked together with the lasso (strokes, text boxes, pictures). */
+class ItemGroup(val items: List<Any>)
+
+/** x and y are normalized to the page WIDTH (0..1 across, 0..aspect down). */
+class StrokePoint(val x: Float, val y: Float, val pressure: Float)
+
+/** width is normalized to page width. Identity equality on purpose (used by undo). */
+class InkStroke(
+    val points: MutableList<StrokePoint>,
+    val color: Int,
+    val width: Float,
+    val highlighter: Boolean
+)
+
+/**
+ * A text box. x = left edge, y = baseline of the first line, size = text size; all normalized to
+ * page width. [text] may have several lines ("\n"). [width] = box width (0 = as wide as the longest
+ * line, no wrapping); longer lines wrap at word boundaries (Thai too). [align]: 0 left, 1 center, 2 right.
+ */
+class TextNote(
+    val text: String,
+    val x: Float,
+    val y: Float,
+    val color: Int,
+    val size: Float,
+    val width: Float = 0f,
+    val align: Int = 0
+) {
+    fun copy(
+        text: String = this.text, x: Float = this.x, y: Float = this.y, color: Int = this.color,
+        size: Float = this.size, width: Float = this.width, align: Int = this.align
+    ) = TextNote(text, x, y, color, size, width, align)
+}
+
+/**
+ * A picture placed on the page. [file] is the image in the app's storage; x,y = top-left and
+ * w,h = size, all normalized to the page width. Identity equality (undo).
+ */
+class ImageNote(
+    val file: String,
+    val x: Float,
+    val y: Float,
+    val w: Float,
+    val h: Float
+)
+
+/**
+ * A text highlight (PDF /Highlight markup). [rects] are line boxes, normalized like everything
+ * else (x 0..1 across the page width, y in width units, as displayed). Identity equality (undo).
+ */
+class TextHighlight(
+    val rects: List<com.titipong.pdfwriter.compat.RectF>,
+    val color: Int,
+    val text: String,
+    /** true = underline (PDF /Underline), false = highlight (PDF /Highlight). */
+    val underline: Boolean = false
+) {
+    fun withColor(c: Int) = TextHighlight(rects, c, text, underline)
+}
+
+class PageAnnotations {
+    val strokes: MutableList<InkStroke> = mutableListOf()
+    val texts: MutableList<TextNote> = mutableListOf()
+    val highlights: MutableList<TextHighlight> = mutableListOf()
+    val images: MutableList<ImageNote> = mutableListOf()
+    fun isEmpty() = strokes.isEmpty() && texts.isEmpty() && highlights.isEmpty() && images.isEmpty()
+
+    /** Shallow copy (the items themselves are never mutated once added). */
+    fun copy(): PageAnnotations = PageAnnotations().also {
+        it.strokes.addAll(strokes)
+        it.texts.addAll(texts)
+        it.highlights.addAll(highlights)
+        it.images.addAll(images)
+    }
+}
+
+/** A bookmark this app manages (stored in the PDF outline, marked /PWBookmark). */
+class Bookmark(var title: String, var page: Int)
+
+/** An entry of the file's own table of contents (read-only here). */
+class OutlineEntry(val title: String, val page: Int, val depth: Int)
+
+
+/** Pen pressure -> line width factor (shared by the screen and the PDF writer). */
+object Ink {
+    fun pressureScale(p: Float): Float = 0.4f + p.coerceIn(0f, 1f) * 1.2f
+    /** pressureScale(0.5) = 1: the stroke has exactly the chosen width. */
+    const val NEUTRAL_PRESSURE = 0.5f
+}

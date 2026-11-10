@@ -1,0 +1,8 @@
+.gradle/
+build/
+appResources/
+hwr/bin/
+hwr/obj/
+*.jks
+local.properties
+.idea/
