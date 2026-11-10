@@ -49,6 +49,10 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isTertiaryPressed
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
@@ -188,6 +192,27 @@ fun DocumentViewer(app: AppState, doc: DocState) {
             }
         }
 
+        // Middle button (wheel press) held: drag the pages, anywhere in the viewer, any mode / tool.
+        val middlePan = Modifier.pointerInput(onPan) {
+            awaitPointerEventScope {
+                while (true) {
+                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                    if (ev.type != PointerEventType.Press || !ev.buttons.isTertiaryPressed) continue
+                    var last = ev.changes.firstOrNull()?.position ?: continue
+                    ev.changes.forEach { it.consume() }
+                    while (true) {
+                        val e = awaitPointerEvent(PointerEventPass.Initial)
+                        val ch = e.changes.firstOrNull() ?: break
+                        val d = ch.position - last
+                        last = ch.position
+                        if (d != Offset.Zero) onPan(d)
+                        e.changes.forEach { it.consume() }
+                        if (!e.buttons.isTertiaryPressed) break
+                    }
+                }
+            }
+        }.pointerHoverIcon(PointerIcon.Default)
+
         // Which page is being read.
         LaunchedEffect(doc, rows, vertical) {
             snapshotFlow {
@@ -231,7 +256,7 @@ fun DocumentViewer(app: AppState, doc: DocState) {
 
         if (vertical) {
             val contentW = max(vw, rowW + margin * 2)
-            Box(Modifier.fillMaxSize().then(wheel)) {
+            Box(Modifier.fillMaxSize().then(wheel).then(middlePan)) {
                 Box(Modifier.fillMaxSize().horizontalScroll(doc.hScroll)) {
                     LazyColumn(
                         state = doc.listState,
@@ -254,7 +279,7 @@ fun DocumentViewer(app: AppState, doc: DocState) {
         } else {
             val contentH = max(vh, maxRowH + margin * 2)
             val snap = rememberSnapFlingBehavior(doc.listState)
-            Box(Modifier.fillMaxSize().then(wheel)) {
+            Box(Modifier.fillMaxSize().then(wheel).then(middlePan)) {
                 Box(Modifier.fillMaxSize().verticalScroll(doc.vScroll)) {
                     LazyRow(
                         state = doc.listState,

@@ -208,11 +208,7 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val W = width
-                    if (currentEvent.buttons.isTertiaryPressed) {
-                        // Middle button (wheel press): drag the pages, in any mode / tool.
-                        panGesture(down, coords, onPan)
-                        return@awaitEachGesture
-                    }
+                    if (currentEvent.buttons.isTertiaryPressed) return@awaitEachGesture // the viewer pans
                     val secondary = currentEvent.buttons.isSecondaryPressed
                     val eraserPen = down.type == PointerType.Eraser
                     fun nx(o: Offset) = o.x / W
