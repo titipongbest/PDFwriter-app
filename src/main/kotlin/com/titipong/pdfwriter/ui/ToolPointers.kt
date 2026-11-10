@@ -9,7 +9,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.toAwtImage
-import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.LayoutDirection
@@ -17,7 +16,7 @@ import com.titipong.pdfwriter.model.DrawTool
 
 /** A mouse pointer showing the annotate tool in use: the tool's icon with a white outline. */
 @Composable
-fun toolPointer(tool: DrawTool): PointerIcon? {
+fun toolPointer(tool: DrawTool): java.awt.Cursor? {
     val name = when (tool) {
         DrawTool.PEN -> "ic_pen"
         DrawTool.HIGHLIGHTER -> "ic_highlight"
@@ -46,7 +45,7 @@ fun toolPointer(tool: DrawTool): PointerIcon? {
                 DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.ERASER -> java.awt.Point((off + s * 0.12f).toInt(), (off + s * 0.88f).toInt())
                 else -> java.awt.Point(full / 2, full / 2)
             }
-            PointerIcon(java.awt.Toolkit.getDefaultToolkit().createCustomCursor(img.toAwtImage(), hot, name))
+            java.awt.Toolkit.getDefaultToolkit().createCustomCursor(img.toAwtImage(), hot, name)
         } catch (e: Throwable) {
             null
         }

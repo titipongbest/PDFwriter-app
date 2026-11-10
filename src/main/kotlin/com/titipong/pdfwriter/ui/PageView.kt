@@ -212,18 +212,43 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
 
     val drawingTool = app.annotate && app.toolActive && app.tool in setOf(DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.ERASER)
     val toolIcon = toolPointer(app.tool)
+    // The pointer is set on the window directly while the mouse is over the page (Compose's hover
+    // icon kept the previous tool's pointer when switching between two tools).
+    val cursor: java.awt.Cursor = when {
+        app.annotate && app.toolActive && app.tool == DrawTool.TEXT -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.TEXT_CURSOR)
+        app.annotate && app.toolActive && toolIcon != null -> toolIcon
+        drawingTool -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR)
+        !app.annotate && overText -> java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.TEXT_CURSOR)
+        else -> java.awt.Cursor.getDefaultCursor()
+    }
+    val cursorNow by rememberUpdatedState(cursor)
+    val hoverTarget = remember { arrayOfNulls<java.awt.Component>(1) }
+    LaunchedEffect(cursor) { hoverTarget[0]?.cursor = cursor }
     Box(
         Modifier.size(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
             .background(paperColor(app))
             .onGloballyPositioned { coords = it }
+            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Enter) { ev ->
+                (ev.nativeEvent as? java.awt.event.MouseEvent)?.component?.let { hoverTarget[0] = it; it.cursor = cursorNow }
+            }
             .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Move) { ev ->
+                (ev.nativeEvent as? java.awt.event.MouseEvent)?.component?.let { c ->
+                    hoverTarget[0] = c
+                    if (c.cursor !== cursorNow) c.cursor = cursorNow
+                    // After Compose has handled the event too (it may set its own pointer).
+                    javax.swing.SwingUtilities.invokeLater { if (hoverTarget[0] === c && c.cursor !== cursorNow) c.cursor = cursorNow }
+                }
                 if (app.annotate) { if (overText) overText = false; return@onPointerEvent }
                 val p = ev.changes.firstOrNull()?.position ?: return@onPointerEvent
                 val idx = doc.searchIndex
                 val on = idx != null && idx.isReady(page) && idx.charAt(page, p.x / width, p.y / width, TEXT_REACH) >= 0
                 if (on != overText) overText = on
             }
-            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { if (overText) overText = false }
+            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) {
+                if (overText) overText = false
+                hoverTarget[0]?.cursor = java.awt.Cursor.getDefaultCursor()
+                hoverTarget[0] = null
+            }
             .pointerInput(doc, page) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -362,16 +387,6 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
         // Live feedback: the stroke being drawn, selection, lasso, guides, eraser.
         Canvas(Modifier.fillMaxSize()) {
             drawOverlay(app, doc, page, size.width, nt)
-        }
-        // The pointer for the current tool. A fresh layer per tool / mode, so the pointer changes as
-        // soon as the mouse moves (changing the icon of one layer didn't always show).
-        val icon = if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
-            else if (app.annotate && app.toolActive && toolIcon != null) toolIcon
-            else if (drawingTool) PointerIcon.Crosshair
-            else if (!app.annotate && overText) PointerIcon.Text
-            else PointerIcon.Default
-        androidx.compose.runtime.key(icon) {
-            Box(Modifier.fillMaxSize().pointerHoverIcon(icon))
         }
         SelectionPopup(app, doc, page, widthPx)
     }
