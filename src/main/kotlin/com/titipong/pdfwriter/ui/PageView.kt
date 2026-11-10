@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -207,6 +208,11 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val W = width
+                    if (currentEvent.buttons.isTertiaryPressed) {
+                        // Middle button (wheel press): drag the pages, in any mode / tool.
+                        panGesture(down, coords, onPan)
+                        return@awaitEachGesture
+                    }
                     val secondary = currentEvent.buttons.isSecondaryPressed
                     val eraserPen = down.type == PointerType.Eraser
                     fun nx(o: Offset) = o.x / W
