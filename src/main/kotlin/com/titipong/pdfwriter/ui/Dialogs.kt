@@ -328,6 +328,7 @@ private fun Thumb(doc: DocState, src: Int?, selected: Boolean, label: String, on
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PagesDialog(app: AppState, doc: DocState) {
     val n = doc.pageCount
