@@ -16,8 +16,9 @@ object ToolPointers {
     private val cache = HashMap<DrawTool, PointerIcon?>()
 
     fun forTool(context: Context, tool: DrawTool): PointerIcon? {
-        if (tool == DrawTool.TEXT) return PointerIcon.getSystemIcon(context, PointerIcon.TYPE_TEXT)
-        return cache.getOrPut(tool) { make(context, tool) }
+        return cache.getOrPut(tool) {
+            if (tool == DrawTool.TEXT) PointerIcon.getSystemIcon(context, PointerIcon.TYPE_TEXT) else make(context, tool)
+        }
     }
 
     private fun make(context: Context, tool: DrawTool): PointerIcon? {

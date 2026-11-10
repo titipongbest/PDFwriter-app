@@ -660,11 +660,17 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    /** Mouse / S Pen hover pointer: shows the selected annotate tool. */
-    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): android.view.PointerIcon? {
-        val h = host ?: return super.onResolvePointerIcon(event, pointerIndex)
-        if (h.viewMode || !h.toolActive) return super.onResolvePointerIcon(event, pointerIndex)
-        return ToolPointers.forTool(context, h.tool) ?: super.onResolvePointerIcon(event, pointerIndex)
+    /** Mouse / S Pen hover pointer: shows the selected annotate tool (set again whenever the tool changed). */
+    private fun toolPointer(): android.view.PointerIcon? {
+        val h = host ?: return null
+        if (h.viewMode || !h.toolActive) return null
+        return ToolPointers.forTool(context, h.tool)
+    }
+
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        val icon = toolPointer()
+        if (icon !== pointerIcon) pointerIcon = icon
+        return super.onHoverEvent(event)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
