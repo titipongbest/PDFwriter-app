@@ -768,7 +768,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.dra
                 doc.guides = if (gx.isEmpty() && gy.isEmpty()) null else Triple(page, gx, gy)
                 kit.shifted(orig, dx, dy)
             }
-            is Handle.Corner -> if (orig is InkStroke) kit.scaledGroup(ItemGroup(listOf(orig)), handle.i, x, y, 0f)?.items?.firstOrNull()
+            is Handle.Corner -> if (orig is InkStroke || orig is TextNote) kit.scaledGroup(ItemGroup(listOf(orig)), handle.i, x, y, 0f)?.items?.firstOrNull()
                 else kit.resized(orig, handle.i, x, y, pad)
             is Handle.Side -> (orig as? TextNote)?.let { kit.widened(it, handle.left, x) }
             is Handle.End -> (orig as? InkStroke)?.let { kit.stretched(it, handle.i, x, y) }
