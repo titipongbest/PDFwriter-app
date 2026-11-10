@@ -248,7 +248,7 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
             for (tp in textPositions) {
                 val u = tp.unicode ?: continue
                 val w = pageWidth
-                val h = tp.heightDir.coerceAtLeast(1f)
+                val h = maxOf(tp.heightDir, tp.fontSizeInPt * 0.75f, 1f) // some fonts report a tiny glyph height
                 val r = RectF(tp.x / w, (tp.y - h) / w, (tp.x + tp.widthDirAdj) / w, (tp.y + h * 0.2f) / w)
                 for (ch in u) {
                     display.append(ch)
