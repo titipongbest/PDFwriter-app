@@ -44,6 +44,7 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -107,6 +108,9 @@ class NoteText(val measurer: TextMeasurer, val density: androidx.compose.ui.unit
 }
 
 val LocalNoteText = staticCompositionLocalOf<NoteText> { error("no NoteText") }
+
+/** How close (page widths) the mouse must be to a letter to count as on the text. */
+private const val TEXT_REACH = 0.008f
 
 private val SEL_BLUE = Color(0xFF2563EB)
 private val GUIDE = Color(0xFFEC4899)
@@ -193,9 +197,17 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
     val bitmap = rememberPageBitmap(app, doc, renderer, page, widthPx)
     var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
     val clicks = remember { ClickTracker() }
+    // View mode: the mouse is over text (shows the text cursor; dragging there selects).
+    var overText by remember { mutableStateOf(false) }
 
-    LaunchedEffect(doc.searchIndex, page, app.annotate) {
-        if (!app.annotate) doc.searchIndex?.ensurePage(page)
+    // View mode: read this page's text (also after the file is reloaded or OCR'd).
+    LaunchedEffect(page, app.annotate) {
+        if (app.annotate) return@LaunchedEffect
+        while (true) {
+            val idx = doc.searchIndex
+            if (idx != null && !idx.isReady(page)) idx.ensurePage(page)
+            delay(1000)
+        }
     }
 
     val drawingTool = app.annotate && app.toolActive && app.tool in setOf(DrawTool.PEN, DrawTool.HIGHLIGHTER, DrawTool.ERASER)
@@ -203,7 +215,20 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
         Modifier.size(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
             .background(paperColor(app))
             .onGloballyPositioned { coords = it }
-            .pointerHoverIcon(if (drawingTool) PointerIcon.Crosshair else if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text else PointerIcon.Default)
+            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Move) { ev ->
+                if (app.annotate) { if (overText) overText = false; return@onPointerEvent }
+                val p = ev.changes.firstOrNull()?.position ?: return@onPointerEvent
+                val idx = doc.searchIndex
+                val on = idx != null && idx.isReady(page) && idx.charAt(page, p.x / width, p.y / width, TEXT_REACH) >= 0
+                if (on != overText) overText = on
+            }
+            .onPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Exit) { if (overText) overText = false }
+            .pointerHoverIcon(
+                if (drawingTool) PointerIcon.Crosshair
+                else if (app.annotate && app.toolActive && app.tool == DrawTool.TEXT) PointerIcon.Text
+                else if (!app.annotate && overText) PointerIcon.Text
+                else PointerIcon.Default
+            )
             .pointerInput(doc, page) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -293,7 +318,7 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
                     val idx = doc.searchIndex
                     if (!app.annotate) {
                         val hl = pa?.highlights?.lastOrNull { h -> h.rects.any { it.contains(x0, y0) } }
-                        val ci = if (idx != null && idx.isReady(page)) idx.charAt(page, x0, y0, 0.004f) else -1
+                        val ci = if (idx != null && idx.isReady(page)) idx.charAt(page, x0, y0, TEXT_REACH) else -1
                         if (isDouble && ci >= 0 && idx != null) {
                             val r = idx.wordAt(page, ci)
                             doc.textSel = TextSelection(page, r.first, r.last)
