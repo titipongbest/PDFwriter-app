@@ -233,6 +233,28 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (uri != null) openPdf(uri, remember = persistPermission(uri), silent = false)
     }
 
+    /** A file opened read-only (e.g. from My Files): picked again here to get permission to save into it. */
+    private var readOnlyUri: Uri? = null
+    private val grantWrite = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val old = readOnlyUri
+        readOnlyUri = null
+        if (uri == null) return@registerForActivityResult
+        persistPermission(uri)
+        if (old != null && docUri?.toString() == old.toString() && uri.toString() != old.toString()) {
+            // Carry the ink over to the new link, marked "not yet in the file", then reopen: it gets written.
+            saveNow()
+            try {
+                AnnotationStorage.save(
+                    applicationContext, AnnotationStorage.keyFor(uri.toString()),
+                    AnnotationStorage.toJson(pages, bookmarks, synced = false), 0
+                )
+            } catch (e: Exception) { }
+            tabs.removeAll { it.uri == old.toString() }
+            saveTabs()
+        }
+        openPdf(uri, remember = true, silent = false, force = true)
+    }
+
     private val exportPdf = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) exportCopy(uri)
     }
@@ -1284,7 +1306,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             dirty = false
             changeVersion++
             pdfSavedVersion = changeVersion
-            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let { prefs.edit().putString("meta_$key", it).apply() }
+            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let {
+                prefs.edit().putString("meta_$key", it)
+                    .putString("alias_${docName}|${it.substringBefore(':')}", key).apply()
+            }
 
             // Swap the app over to the new layout.
             val finalCopy = File(dir, "$key.pdf")
@@ -1512,7 +1537,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 return@launch
             }
             // The file now matches our private copy + ink: a later reopen may reuse them.
-            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let { prefs.edit().putString("meta_$key", it).apply() }
+            withContext(Dispatchers.IO) { sourceMeta(dest) }?.let {
+                prefs.edit().putString("meta_$key", it)
+                    .putString("alias_${docName}|${it.substringBefore(':')}", key).apply()
+            }
             // Nothing changed meanwhile: mark the in-app copy as matching the file.
             if (changeVersion == version && docKey == key) {
                 val json = AnnotationStorage.toJson(snap, snapBookmarks, synced = true)
@@ -1904,6 +1932,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             if (interactionView) prepareTextIndex()
             supportActionBar?.title = getString(R.string.app_name) // the file name is on the tab
             setStatus(if (opened.writable) R.string.saved_in_pdf else R.string.read_only_file)
+            if (!opened.writable) {
+                Snackbar.make(binding.root, R.string.read_only_hint, 10000)
+                    .setAction(R.string.allow_saving) {
+                        readOnlyUri = uri
+                        Toast.makeText(this@MainActivity, R.string.pick_same_file, Toast.LENGTH_LONG).show()
+                        grantWrite.launch(arrayOf("application/pdf"))
+                    }.show()
+            }
             binding.recycler.post { updatePageIndicator() }
             if (remember) prefs.edit().putString(PREF_LAST_URI, uri.toString()).apply()
 
@@ -1951,6 +1987,9 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     }
 
     /** Size and modification time of the source file, to tell whether it changed since we last saw it. */
+    private fun countItems(pages: Map<Int, PageAnnotations>): Int =
+        pages.values.sumOf { it.strokes.size + it.texts.size + it.highlights.size + it.images.size }
+
     private fun sourceMeta(uri: Uri): String? {
         var size: Long? = null
         var modified = 0L
@@ -1978,7 +2017,21 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val dir = File(filesDir, "docs").apply { mkdirs() }
         val copy = File(dir, "$key.pdf")
         val meta = sourceMeta(uri)
-        val side = AnnotationStorage.load(applicationContext, key)
+        // The same file can arrive through different links (My Files, Recent, the picker...):
+        // ink saved under another link for this file (same name and size) is found too.
+        val aliasPref = meta?.let { "alias_${queryName(uri)}|${it.substringBefore(':')}" }
+        var side = AnnotationStorage.load(applicationContext, key)
+        if (side == null && aliasPref != null) {
+            prefs.getString(aliasPref, null)?.takeIf { it != key }?.let { other ->
+                side = AnnotationStorage.load(applicationContext, other)
+                side?.let { sd ->
+                    try {
+                        AnnotationStorage.save(applicationContext, key, AnnotationStorage.toJson(sd.pages, sd.bookmarks, sd.synced), 0)
+                    } catch (e: Exception) { }
+                }
+            }
+        }
+        if (aliasPref != null) prefs.edit().putString(aliasPref, key).apply()
         val fast = meta != null && side != null && copy.exists() && meta == prefs.getString("meta_$key", null)
 
         if (!fast) {
@@ -1999,10 +2052,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         )
         val writable = canWrite(uri)
 
-        if (fast && side != null) {
+        val fs = side
+        if (fast && fs != null) {
             return Opened(
-                doc, copy, side.pages, side.bookmarks, AnnotationStorage.loadToc(applicationContext, key),
-                writable, needsPdfWrite = !side.synced
+                doc, copy, fs.pages, fs.bookmarks, AnnotationStorage.loadToc(applicationContext, key),
+                writable, needsPdfWrite = !fs.synced
             )
         }
 
@@ -2023,10 +2077,19 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         }
         // The PDF file is the source of truth (it may have been edited in another app),
         // unless the app holds newer changes that never made it into the file.
-        if (side != null && (!side.synced || !writable)) {
+        val sd = side
+        if (sd != null && (!sd.synced || !writable)) {
             return Opened(
-                doc, copy, side.pages, side.bookmarks, toc, writable,
-                needsPdfWrite = !side.synced, copiedMeta = meta
+                doc, copy, sd.pages, sd.bookmarks, toc, writable,
+                needsPdfWrite = !sd.synced, copiedMeta = meta
+            )
+        }
+        // The file has less of this app's ink than was saved into it: the save didn't stick
+        // (the file app dropped it). Never lose the work: keep the app's copy and write it again.
+        if (sd != null && countItems(sd.pages) > countItems(fromPdf.pages)) {
+            return Opened(
+                doc, copy, sd.pages, sd.bookmarks, toc, writable,
+                needsPdfWrite = writable, copiedMeta = meta
             )
         }
         return Opened(

@@ -377,14 +377,51 @@ object PdfAnnotationIO {
         withContext(Dispatchers.IO) {
             val out = File(context.cacheDir, "pdfwriter-out.pdf")
             buildInto(source, pages, bookmarks, out, flatten, dropFileOutline)
-            val os = try {
-                context.contentResolver.openOutputStream(dest, "wt")
+            val expected = sha1(out.inputStream())
+            fun kept(): Boolean = try {
+                context.contentResolver.openInputStream(dest)?.let { sha1(it) }?.contentEquals(expected) == true
             } catch (e: Exception) {
-                context.contentResolver.openOutputStream(dest, "w")
-            } ?: throw java.io.IOException("Cannot write")
-            os.use { o -> out.inputStream().use { it.copyTo(o) } }
+                false
+            }
+            try {
+                val os = try {
+                    context.contentResolver.openOutputStream(dest, "wt")
+                } catch (e: Exception) {
+                    context.contentResolver.openOutputStream(dest, "w")
+                } ?: throw java.io.IOException("Cannot write")
+                os.use { o -> out.inputStream().use { it.copyTo(o) } }
+            } catch (e: Exception) {
+                // Tried again below.
+            }
+            if (!kept()) {
+                // Some file apps ignore "truncate" (old bytes stay at the end and readers see the old
+                // file) or drop the write: write through the file itself, cut to the new length.
+                context.contentResolver.openFileDescriptor(dest, "rw")?.use { pfd ->
+                    java.io.FileOutputStream(pfd.fileDescriptor).use { fos ->
+                        val ch = fos.channel
+                        ch.truncate(0)
+                        ch.position(0)
+                        out.inputStream().use { it.copyTo(fos) }
+                        fos.flush()
+                        ch.truncate(out.length())
+                        try { fos.fd.sync() } catch (e: Exception) { }
+                    }
+                } ?: throw java.io.IOException("Cannot write")
+                if (!kept()) throw java.io.IOException("The file didn't keep the changes")
+            }
             out.delete()
         }
+    }
+
+    private fun sha1(input: java.io.InputStream): ByteArray = input.use {
+        val md = java.security.MessageDigest.getInstance("SHA-1")
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+            val n = it.read(buf)
+            if (n < 0) break
+            md.update(buf, 0, n)
+        }
+        md.digest()
     }
 
     /** Same as [write], into a local file. */
