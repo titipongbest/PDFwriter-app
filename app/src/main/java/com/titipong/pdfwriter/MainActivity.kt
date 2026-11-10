@@ -1622,22 +1622,17 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun showExportDialog() {
         if (document == null) return
         val base = docName.removeSuffix(".pdf")
-        val items = arrayOf(
-            getString(R.string.export_identical),
-            getString(R.string.export_flattened),
-            getString(R.string.export_extract)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.export_title)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> exportPdf.launch("$base-copy.pdf")
-                    1 -> exportFlat.launch("$base-flattened.pdf")
-                    else -> openExtractPicker()
-                }
+        com.titipong.pdfwriter.ui.OptionSheet.show(this, getString(R.string.export_title), listOf(
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_copy, getString(R.string.opt_copy_t), getString(R.string.opt_copy_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_cover, getString(R.string.opt_flat_t), getString(R.string.opt_flat_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_pages, getString(R.string.opt_extract_t), getString(R.string.opt_extract_s))
+        )) { which ->
+            when (which) {
+                0 -> exportPdf.launch("$base-copy.pdf")
+                1 -> exportFlat.launch("$base-flattened.pdf")
+                else -> openExtractPicker()
             }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        }
     }
 
     /** The page overview in "tick pages to extract" mode. */
@@ -1656,14 +1651,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             return
         }
         val base = docName.removeSuffix(".pdf")
-        val items = arrayOf(
-            getString(R.string.extract_as_pdf),
-            getString(R.string.extract_as_png),
-            getString(R.string.extract_as_jpg)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.extract_as, selected.size))
-            .setItems(items) { _, which ->
+        com.titipong.pdfwriter.ui.OptionSheet.show(this, getString(R.string.extract_as, selected.size), listOf(
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_page_single, getString(R.string.opt_pdf_t), getString(R.string.opt_pdf_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_image, getString(R.string.opt_png_t), getString(R.string.opt_png_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_image, getString(R.string.opt_jpg_t), getString(R.string.opt_jpg_s))
+        )) { which ->
                 when (which) {
                     0 -> {
                         pendingExtract = selected
@@ -1681,9 +1673,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                         }
                     }
                 }
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        }
     }
 
     private fun runExtractPdf(selected: List<Int>, dest: Uri) {
@@ -3348,15 +3338,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun showOcrDialog() {
         if (document == null || applyingPages) return
         val page = currentPage().coerceAtLeast(0)
-        val items = arrayOf(
-            getString(R.string.ocr_this_page, page + 1),
-            getString(R.string.ocr_all_pages)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.ocr_title)
-            .setItems(items) { _, which -> runOcr(if (which == 0) listOf(page) else null) }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
+        com.titipong.pdfwriter.ui.OptionSheet.show(this, getString(R.string.ocr_title), listOf(
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_ocr, getString(R.string.opt_ocr_page_t, page + 1), getString(R.string.opt_ocr_page_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_pages, getString(R.string.opt_ocr_all_t), getString(R.string.opt_ocr_all_s))
+        )) { which -> runOcr(if (which == 0) listOf(page) else null) }
     }
 
     /** OCRs [pagesToRead], or (null) every page without extractable text, then saves a text layer. */

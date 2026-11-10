@@ -313,13 +313,10 @@ class ViewModeDialog(
     }
 
     private fun editCustomColors() {
-        val items = arrayOf(
-            context.getString(R.string.vm_custom_bg),
-            context.getString(R.string.vm_custom_fg)
-        )
-        MaterialAlertDialogBuilder(context)
-            .setTitle(R.string.vm_custom_colors)
-            .setItems(items) { _, which ->
+        OptionSheet.show(context, context.getString(R.string.vm_custom_colors), listOf(
+            OptionSheet.Option(R.drawable.ic_palette, context.getString(R.string.vm_custom_bg), context.getString(R.string.opt_bg_s)),
+            OptionSheet.Option(R.drawable.ic_palette, context.getString(R.string.vm_custom_fg), context.getString(R.string.opt_fg_s))
+        )) { which ->
                 val initial = if (which == 0) settings.customBg else settings.customFg
                 ColorPicker.show(context, initial) { picked ->
                     if (which == 0) settings.customBg = picked else settings.customFg = picked
@@ -327,8 +324,7 @@ class ViewModeDialog(
                     updateColors()
                     onChange()
                 }
-            }
-            .show()
+        }
     }
 
     private fun selectableBackground() = context.obtainStyledAttributes(
