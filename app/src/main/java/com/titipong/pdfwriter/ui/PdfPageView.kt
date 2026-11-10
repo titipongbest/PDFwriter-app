@@ -689,6 +689,7 @@ class PdfPageView(context: Context) : View(context) {
         // The S Pen shows the system's own pointer, not the app's: draw the tool's picture at the pen.
         val tt = event.getToolType(0)
         val pen = tt == MotionEvent.TOOL_TYPE_STYLUS || tt == MotionEvent.TOOL_TYPE_ERASER
+        host?.let { hh -> if (hh.viewMode || !hh.toolActive) hintTool = null } // choosing the tool again shows it again
         val show = pen && toolPointer() != null && event.actionMasked != MotionEvent.ACTION_HOVER_EXIT
         if (show) {
             penHoverX = event.x
@@ -711,6 +712,10 @@ class PdfPageView(context: Context) : View(context) {
         if (penHoverX.isNaN() || mode != Mode.NONE) return
         val h = host ?: return
         if (h.viewMode || !h.toolActive) { penHoverX = Float.NaN; return }
+        // Pen / highlighter / eraser: only as a reminder right after choosing the tool, until it's used.
+        val key = h.tool
+        if (key != hintTool) { hintTool = key; hintUsed = false }
+        if (hintUsed && (key == DrawTool.PEN || key == DrawTool.HIGHLIGHTER || key == DrawTool.ERASER)) return
         if (h.tool == DrawTool.ERASER) {
             // The eraser's size, where it would erase.
             val r = max(h.eraserWidth * pageScale * 3f, minEraserPx)
@@ -1523,6 +1528,10 @@ class PdfPageView(context: Context) : View(context) {
 
     private fun begin(e: MotionEvent, h: Host, eraserButton: Boolean) {
         val tool = if (eraserButton) DrawTool.ERASER else h.tool
+        if (tool == h.tool && (tool == DrawTool.PEN || tool == DrawTool.HIGHLIGHTER || tool == DrawTool.ERASER)) {
+            hintTool = tool
+            hintUsed = true // started writing / erasing: the hover picture is no longer shown
+        }
         when (tool) {
             DrawTool.ERASER -> {
                 mode = Mode.ERASE
@@ -1726,6 +1735,10 @@ class PdfPageView(context: Context) : View(context) {
     }
 
     companion object {
+        /** The tool whose hover picture was shown, and whether it has been used since (shared by all pages). */
+        private var hintTool: DrawTool? = null
+        private var hintUsed = false
+
         /** Set by MainActivity while it re-dispatches Samsung's legacy "side button held" events. */
         @JvmStatic
         var penButtonOverride = false
