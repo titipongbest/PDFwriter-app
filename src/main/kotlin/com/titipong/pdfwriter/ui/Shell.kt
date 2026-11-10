@@ -66,7 +66,7 @@ import com.titipong.pdfwriter.Prefs
 import com.titipong.pdfwriter.model.DrawTool
 import kotlinx.coroutines.launch
 
-const val APP_VERSION = "1.10"
+const val APP_VERSION = "1.11"
 
 @Composable
 fun App(app: AppState) {
@@ -106,6 +106,10 @@ fun App(app: AppState) {
                             CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
                             Spacer(Modifier.width(14.dp))
                             Label(p, size = 14)
+                            app.progressCancel?.let { cancel ->
+                                Spacer(Modifier.width(16.dp))
+                                OutlinedButton(cancel) { Text("Cancel", fontFamily = Ui.font) }
+                            }
                         }
                     }
                 }

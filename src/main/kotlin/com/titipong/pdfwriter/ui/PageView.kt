@@ -203,10 +203,20 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
     // View mode: read this page's text (also after the file is reloaded or OCR'd).
     LaunchedEffect(page, app.annotate) {
         if (app.annotate) return@LaunchedEffect
+        var notesFor: Pair<SearchIndexRef, Int>? = null
         while (true) {
             val idx = doc.searchIndex
             if (idx != null && !idx.isReady(page)) idx.ensurePage(page)
-            delay(1000)
+            // Text boxes (Text tool) are selectable / highlightable like the page's text.
+            val v = doc.versions[page] ?: 0
+            if (idx != null && notesFor != (SearchIndexRef(idx) to v)) {
+                notesFor = SearchIndexRef(idx) to v
+                val boxes = doc.pages[page]?.texts?.toList() ?: emptyList()
+                idx.setNotes(page, com.titipong.pdfwriter.search.SearchIndex.noteChars(
+                    boxes, { kit.layout(it) }, { t, l -> kit.boxWidth(t, l) }, { t, str -> nt.width(str) * t.size }
+                ))
+            }
+            delay(500)
         }
     }
 
@@ -284,8 +294,7 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
 
                     // An item under the pointer (tap or drag selects / moves it).
                     val pad = 6f / W
-                    val itemHit: Any? = if (pa == null) null else if (!app.annotate) kit.textAt(pa, x0, y0, pad) // view mode: text boxes too
-                    else when {
+                    val itemHit: Any? = if (pa == null || !app.annotate) null else when {
                         !annotateTool -> kit.textAt(pa, x0, y0, pad) ?: kit.imageAt(pa, x0, y0)
                         app.tool == DrawTool.TEXT -> kit.textAt(pa, x0, y0, pad)
                         app.tool == DrawTool.IMAGE -> kit.imageAt(pa, x0, y0) ?: kit.textAt(pa, x0, y0, pad)
@@ -956,4 +965,10 @@ private fun SelectionPopup(app: AppState, doc: DocState, page: Int, W: Float) {
             }
         }
     }
+}
+
+/** Identity wrapper (a page's text boxes are given to each search index once per change). */
+private class SearchIndexRef(val idx: com.titipong.pdfwriter.search.SearchIndex) {
+    override fun equals(other: Any?) = other is SearchIndexRef && other.idx === idx
+    override fun hashCode() = System.identityHashCode(idx)
 }

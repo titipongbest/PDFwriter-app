@@ -40,7 +40,50 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
     private var closed = false
 
     private val pages: List<PageText?>
-        get() = List(pageCount) { texts.get(it) }
+        get() = List(pageCount) { merged(it) }
+
+    // ------------------------------------------------------------ text boxes (Text tool)
+
+    /** Letters of the page's text boxes, selectable / highlightable / searchable like the PDF's text. */
+    private val notes = java.util.concurrent.ConcurrentHashMap<Int, PageText>()
+    private val mergedCache = java.util.concurrent.ConcurrentHashMap<Int, Triple<PageText, PageText?, PageText>>()
+
+    /** Sets the letters of [page]'s text boxes: (letter, its box) — a null box separates lines / boxes. */
+    fun setNotes(page: Int, chars: List<Pair<Char, RectF?>>) {
+        if (chars.none { it.second != null }) {
+            notes.remove(page)
+            return
+        }
+        val compact = StringBuilder()
+        val display = StringBuilder()
+        val rects = ArrayList<RectF>()
+        val map = ArrayList<Int>()
+        for ((ch, r) in chars) {
+            display.append(ch)
+            if (r == null || ch.isWhitespace()) continue
+            compact.append(ch.lowercaseChar())
+            rects.add(r)
+            map.add(display.length - 1)
+        }
+        notes[page] = PageText(compact.toString(), rects, display.toString(), map.toIntArray())
+    }
+
+    /** The page's PDF text followed by its text boxes' letters (null until the PDF text is read). */
+    private fun merged(page: Int): PageText? {
+        val base = texts.getOrNull(page) ?: return null
+        val n = notes[page] ?: return base
+        mergedCache[page]?.let { (b, nn, m) -> if (b === base && nn === n) return m }
+        val sep = if (base.display.isEmpty()) "" else " "
+        val shift = base.display.length + sep.length
+        val m = PageText(
+            base.compact + n.compact,
+            base.rects + n.rects,
+            base.display + sep + n.display,
+            base.compactToDisplay + IntArray(n.compactToDisplay.size) { n.compactToDisplay[it] + shift }
+        )
+        mergedCache[page] = Triple(base, n, m)
+        return m
+    }
 
     fun isReady(page: Int): Boolean = page in 0 until pageCount && texts.get(page) != null
     val allReady: Boolean get() = (0 until pageCount).all { texts.get(it) != null }
@@ -127,14 +170,14 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
     }
     private val lineCache = java.util.concurrent.ConcurrentHashMap<Int, List<RectF>>()
 
-    fun hasText(page: Int): Boolean = texts.getOrNull(page)?.compact?.isNotEmpty() == true
+    fun hasText(page: Int): Boolean = merged(page)?.compact?.isNotEmpty() == true
 
     /**
      * Index of the character at (or nearest to) a normalized point. With [maxDistance] > 0,
      * returns -1 when nothing is that close (e.g. a tap on blank margin).
      */
     fun charAt(page: Int, nx: Float, ny: Float, maxDistance: Float = 0f): Int {
-        val pt = texts.getOrNull(page) ?: return -1
+        val pt = merged(page) ?: return -1
         var best = -1
         var bestD = Float.MAX_VALUE
         pt.rects.forEachIndexed { i, r ->
@@ -153,7 +196,7 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
 
     /** The word around character [i]. Thai words are found with ICU's dictionary word breaker. */
     fun wordAt(page: Int, i: Int): IntRange {
-        val pt = texts.getOrNull(page) ?: return i..i
+        val pt = merged(page) ?: return i..i
         if (i !in pt.compact.indices) return i..i
         val disp = pt.compactToDisplay[i]
         val bi = java.text.BreakIterator.getWordInstance(Locale("th"))
@@ -171,7 +214,7 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
     }
 
     fun rangeRects(page: Int, from: Int, to: Int): List<RectF> {
-        val pt = texts.getOrNull(page) ?: return emptyList()
+        val pt = merged(page) ?: return emptyList()
         val a = min(from, to).coerceIn(0, pt.rects.size - 1)
         val b = max(from, to).coerceIn(0, pt.rects.size - 1)
         if (pt.rects.isEmpty()) return emptyList()
@@ -180,7 +223,7 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
 
     /** The selected text with its original spacing. */
     fun rangeText(page: Int, from: Int, to: Int): String {
-        val pt = texts.getOrNull(page) ?: return ""
+        val pt = merged(page) ?: return ""
         if (pt.compact.isEmpty()) return ""
         val a = min(from, to).coerceIn(0, pt.compact.length - 1)
         val b = max(from, to).coerceIn(0, pt.compact.length - 1)
@@ -216,6 +259,35 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
 
     companion object {
         private const val MAX_HITS = 2000
+
+        /**
+         * Letters of text boxes with their boxes (page-width units). [lines] lays a box out,
+         * [boxWidth] is its width, [width] measures a string at the box's own size.
+         */
+        fun noteChars(
+            boxes: List<com.titipong.pdfwriter.model.TextNote>,
+            lines: (com.titipong.pdfwriter.model.TextNote) -> List<com.titipong.pdfwriter.model.TextLayout.Line>,
+            boxWidth: (com.titipong.pdfwriter.model.TextNote, List<com.titipong.pdfwriter.model.TextLayout.Line>) -> Float,
+            width: (com.titipong.pdfwriter.model.TextNote, String) -> Float
+        ): List<Pair<Char, RectF?>> {
+            val out = ArrayList<Pair<Char, RectF?>>()
+            for (t in boxes) {
+                val ls = lines(t)
+                val bw = boxWidth(t, ls)
+                ls.forEachIndexed { i, line ->
+                    val base = t.y + t.size * com.titipong.pdfwriter.model.TextLayout.LINE_HEIGHT * i
+                    val left = t.x + com.titipong.pdfwriter.model.TextLayout.offset(t.align, bw, line.width)
+                    var x0 = left
+                    for (k in line.text.indices) {
+                        val x1 = left + width(t, line.text.substring(0, k + 1))
+                        out.add(line.text[k] to RectF(x0, base - t.size * 0.95f, maxOf(x1, x0), base + t.size * 0.25f))
+                        x0 = maxOf(x0, x1)
+                    }
+                    out.add(' ' to null)
+                }
+            }
+            return out
+        }
 
         fun normalize(s: String): String =
             s.lowercase(Locale.ROOT).filterNot { it.isWhitespace() }

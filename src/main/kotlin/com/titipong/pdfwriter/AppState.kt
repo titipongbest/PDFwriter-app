@@ -166,6 +166,8 @@ class AppState(val scope: CoroutineScope) {
     var hwLang by mutableStateOf(Prefs.getString("hw_lang", "th") ?: "th")
 
     var view by mutableStateOf(ViewSettings.load())
+    /** Set while a long job that can be stopped is running: the progress box shows a Cancel button. */
+    var progressCancel by mutableStateOf<(() -> Unit)?>(null)
     var fitWidth by mutableStateOf(Prefs.getBoolean("fit_width", false))
 
     // ---------------------------------------------------------------- UI state
@@ -797,19 +799,24 @@ class AppState(val scope: CoroutineScope) {
         val doc = current ?: return
         val renderer = doc.renderer ?: return
         scope.launch {
+            var cancelled = false
+            progressCancel = { cancelled = true; progress = null; progressCancel = null }
             val targets: List<Int> = if (allMissing) {
                 progress = "Checking pages…"
                 val texts = withContext(Dispatchers.IO) { try { PdfAnnotationIO.extractText(doc.base) } catch (e: Throwable) { emptyList() } }
                 (0 until doc.pageCount).filter { texts.getOrNull(it).isNullOrBlank() }
             } else listOf(doc.currentPage)
-            if (targets.isEmpty()) { progress = null; toast("Every page already has text"); return@launch }
+            if (targets.isEmpty()) { progress = null; progressCancel = null; toast("Every page already has text"); return@launch }
+            if (cancelled) return@launch
             val words = HashMap<Int, List<OcrEngine.Word>>()
             try {
                 val engine = withContext(Dispatchers.IO) { OcrEngine() }
                 try {
-                    targets.forEachIndexed { i, p ->
+                    for ((i, p) in targets.withIndex()) {
+                        if (cancelled) break
                         progress = "OCR page ${p + 1} (${i + 1}/${targets.size})…"
-                        val img = renderer.renderUncached(p, OcrEngine.OCR_WIDTH) ?: return@forEachIndexed
+                        val img = renderer.renderUncached(p, OcrEngine.OCR_WIDTH) ?: continue
+                        if (cancelled) break
                         words[p] = withContext(Dispatchers.IO) { engine.recognize(img) }
                     }
                 } finally {
@@ -817,7 +824,15 @@ class AppState(val scope: CoroutineScope) {
                 }
             } catch (e: Throwable) {
                 progress = null
-                toast("OCR failed: ${e.message}")
+                progressCancel = null
+                if (!cancelled) toast("OCR failed: ${e.message}")
+                return@launch
+            }
+            progressCancel = null
+            if (cancelled) {
+                // Cancel = nothing changes in the file.
+                progress = null
+                toast("OCR cancelled — the file was not changed")
                 return@launch
             }
             saveNow(doc)
