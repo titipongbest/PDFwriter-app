@@ -829,10 +829,10 @@ class AppState(val scope: CoroutineScope) {
                 return@launch
             }
             progressCancel = null
-            if (cancelled) {
-                // Cancel = nothing changes in the file.
+            // Cancel stops reading; the pages read so far are still saved into the file.
+            if (words.values.all { it.isEmpty() }) {
                 progress = null
-                toast("OCR cancelled — the file was not changed")
+                toast(if (cancelled) "OCR cancelled" else "No text found")
                 return@launch
             }
             saveNow(doc)
