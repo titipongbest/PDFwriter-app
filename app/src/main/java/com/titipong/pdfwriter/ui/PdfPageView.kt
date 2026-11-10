@@ -762,7 +762,7 @@ class PdfPageView(context: Context) : View(context) {
         if (h.tool == DrawTool.SELECT && h.toolActive) return onFingerSelect(e, h)
         if (h.tool == DrawTool.WRITE_TEXT && h.toolActive) return onFingerWrite(e, h)
         val placing = h.tool == DrawTool.TEXT || h.tool == DrawTool.IMAGE
-        if (!placing || !h.toolActive) return false // let the list scroll
+        if (!placing || !h.toolActive) return onFingerAnyTool(e, h)
         if (noteDrag(e, h)) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -772,11 +772,55 @@ class PdfPageView(context: Context) : View(context) {
             MotionEvent.ACTION_UP -> {
                 if (hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && toNormalized(e.x, e.y)) {
                     performClick()
-                    if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
+                    val item = itemAt(pt[0], pt[1])
+                    if (item != null) tapItem(h, item)
+                    else if (h.tool == DrawTool.IMAGE) imageTap(h, pt[0], pt[1]) else textTap(h, pt[0], pt[1])
                 }
             }
         }
         return true
+    }
+
+    // ---------------------------------------------------------------- finger taps on items (any tool)
+
+    private fun imageAt(nx: Float, ny: Float): ImageNote? =
+        annotations?.images?.lastOrNull { nx >= it.x && nx <= it.x + it.w && ny >= it.y && ny <= it.y + it.h }
+
+    /** A text box, picture or highlighter line under a normalized point (text first). */
+    private fun itemAt(nx: Float, ny: Float): Any? = textAt(nx, ny) ?: highlighterAt(nx, ny) ?: imageAt(nx, ny)
+
+    private fun tapItem(h: Host, item: Any) {
+        when (item) {
+            is TextNote -> h.onTextTapped(this, pageIndex, item)
+            is ImageNote -> h.onImageTapped(this, pageIndex, item)
+            is InkStroke -> h.onStrokeTapped(this, pageIndex, item)
+        }
+    }
+
+    /**
+     * Pen, eraser, no tool...: a finger tap on a highlighter line, text box or picture selects it
+     * (to move / resize / edit), as with its own tool. Anything else is left to the list (scrolling).
+     */
+    private var fingerOnItem = false
+
+    private fun onFingerAnyTool(e: MotionEvent, h: Host): Boolean {
+        if (noteDrag(e, h)) return true
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                fingerOnItem = toNormalized(e.x, e.y) && itemAt(pt[0], pt[1]) != null
+                if (!fingerOnItem) return false
+                fingerDownX = e.x
+                fingerDownY = e.y
+            }
+            MotionEvent.ACTION_UP -> {
+                if (fingerOnItem && hypot(e.x - fingerDownX, e.y - fingerDownY) < touchSlop && toNormalized(e.x, e.y)) {
+                    itemAt(pt[0], pt[1])?.let { performClick(); tapItem(h, it) }
+                }
+                fingerOnItem = false
+            }
+            MotionEvent.ACTION_CANCEL -> fingerOnItem = false
+        }
+        return fingerOnItem
     }
 
     override fun performClick(): Boolean = super.performClick()
@@ -843,10 +887,10 @@ class PdfPageView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP -> {
                 if (hypot(e.x - hlDownX, e.y - hlDownY) < touchSlop && toNormalized(e.x, e.y)) {
-                    val hit = highlighterAt(pt[0], pt[1])
+                    val hit = highlighterAt(pt[0], pt[1]) ?: textAt(pt[0], pt[1]) ?: imageAt(pt[0], pt[1])
                     if (hit != null) {
                         performClick()
-                        h.onStrokeTapped(this, pageIndex, hit)
+                        tapItem(h, hit)
                     } else if (editingNote != null) {
                         h.onNoteDeselect()
                     }
