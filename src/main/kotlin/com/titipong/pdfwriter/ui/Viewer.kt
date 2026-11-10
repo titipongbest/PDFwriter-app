@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -193,6 +194,7 @@ fun DocumentViewer(app: AppState, doc: DocState) {
         }
 
         // Middle button (wheel press) held: drag the pages, anywhere in the viewer, any mode / tool.
+        var panning by remember { androidx.compose.runtime.mutableStateOf(false) }
         val middlePan = Modifier.pointerInput(onPan) {
             awaitPointerEventScope {
                 while (true) {
@@ -200,6 +202,7 @@ fun DocumentViewer(app: AppState, doc: DocState) {
                     if (ev.type != PointerEventType.Press || !ev.buttons.isTertiaryPressed) continue
                     var last = ev.changes.firstOrNull()?.position ?: continue
                     ev.changes.forEach { it.consume() }
+                    panning = true
                     while (true) {
                         val e = awaitPointerEvent(PointerEventPass.Initial)
                         val ch = e.changes.firstOrNull() ?: break
@@ -209,9 +212,10 @@ fun DocumentViewer(app: AppState, doc: DocState) {
                         e.changes.forEach { it.consume() }
                         if (!e.buttons.isTertiaryPressed) break
                     }
+                    panning = false
                 }
             }
-        }.pointerHoverIcon(PointerIcon.Default)
+        }.then(if (panning) Modifier.pointerHoverIcon(PointerIcon.Hand, overrideDescendants = true) else Modifier)
 
         // Which page is being read.
         LaunchedEffect(doc, rows, vertical) {
