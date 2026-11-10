@@ -266,7 +266,8 @@ fun PageView(app: AppState, doc: DocState, page: Int, widthPx: Float, onPan: (Of
 
                     // An item under the pointer (tap or drag selects / moves it).
                     val pad = 6f / W
-                    val itemHit: Any? = if (pa == null || !app.annotate) null else when {
+                    val itemHit: Any? = if (pa == null) null else if (!app.annotate) kit.textAt(pa, x0, y0, pad) // view mode: text boxes too
+                    else when {
                         !annotateTool -> kit.textAt(pa, x0, y0, pad) ?: kit.imageAt(pa, x0, y0)
                         app.tool == DrawTool.TEXT -> kit.textAt(pa, x0, y0, pad)
                         app.tool == DrawTool.IMAGE -> kit.imageAt(pa, x0, y0) ?: kit.textAt(pa, x0, y0, pad)
