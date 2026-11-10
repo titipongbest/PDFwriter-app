@@ -406,7 +406,15 @@ class AppState(val scope: CoroutineScope) {
     }
 
     suspend fun saveNow(doc: DocState) {
-        doc.saveJob?.cancel()
+        // Only the waiting timer is cancelled; a save that has started always finishes (an edit made
+        // during a long save used to cancel it, so a big file was never saved and "Saving…" stayed).
+        val self = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
+        if (doc.saveJob !== self) doc.saveJob?.cancel()
+        if (!doc.dirty) return
+        withContext(kotlinx.coroutines.NonCancellable) { saveSnapshot(doc) }
+    }
+
+    private suspend fun saveSnapshot(doc: DocState) {
         if (!doc.dirty) return
         doc.dirty = false
         doc.saving = true

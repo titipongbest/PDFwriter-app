@@ -118,7 +118,7 @@ object PdfAnnotationIO {
         val result = mutableMapOf<Int, PageAnnotations>()
         val bookmarks = mutableListOf<Bookmark>()
         val outline = mutableListOf<OutlineEntry>()
-        PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+        PDDocument.load(file, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { doc ->
             var index = 0
             for (page in doc.pages) {
                 val geo = PageGeometry.of(page)
@@ -170,7 +170,7 @@ object PdfAnnotationIO {
 
     /** Plain text of each page, for reading mode. Blank string for pages without extractable text. */
     fun extractText(file: File): List<String> {
-        PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+        PDDocument.load(file, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { doc ->
             val stripper = PDFTextStripper()
             stripper.sortByPosition = true
             val out = ArrayList<String>(doc.numberOfPages)
@@ -407,7 +407,7 @@ object PdfAnnotationIO {
         flatten: Boolean,
         dropFileOutline: Boolean
     ) {
-        PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+        PDDocument.load(source, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { doc ->
             if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
             val fonts = FontSet(doc)
             var index = 0
@@ -534,7 +534,7 @@ object PdfAnnotationIO {
      */
     suspend fun rebuildPages(source: File, order: List<Int?>, out: File) = writeLock.withLock {
         withContext(Dispatchers.IO) {
-            PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+            PDDocument.load(source, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { doc ->
                 if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
                 val tree = doc.pages
                 val old: List<PDPage> = tree.toList()
@@ -567,7 +567,7 @@ object PdfAnnotationIO {
      */
     suspend fun addTextLayer(source: File, words: Map<Int, List<OcrEngine.Word>>, out: File) = writeLock.withLock {
         withContext(Dispatchers.IO) {
-            PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+            PDDocument.load(source, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { doc ->
                 if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
                 val fonts = FontSet(doc)
                 var index = 0

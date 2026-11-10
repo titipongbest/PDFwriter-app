@@ -62,7 +62,7 @@ class SearchIndex(private val file: File, private val pageCount: Int) {
 
     private fun extract(page: Int) {
         if (closed || texts.get(page) != null) return
-        val d = doc ?: PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).also { doc = it }
+        val d = doc ?: PDDocument.load(file, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).also { doc = it }
         val st = stripper ?: PositionStripper().also { stripper = it }
         val width = try { PageGeometry.of(d.getPage(page)).displayWidth } catch (e: Exception) { 1f }
         st.reset(width)

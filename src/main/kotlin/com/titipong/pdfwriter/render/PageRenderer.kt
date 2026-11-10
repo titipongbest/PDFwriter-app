@@ -243,7 +243,7 @@ class PageRenderer private constructor(
 
         /** Opens [file]; [diskDir] keeps rendered pages between sessions. */
         fun open(file: File, diskDir: File?): PageRenderer {
-            val aspects = PDDocument.load(file, MemoryUsageSetting.setupTempFileOnly()).use { d ->
+            val aspects = PDDocument.load(file, MemoryUsageSetting.setupMixed(256L * 1024 * 1024)).use { d ->
                 FloatArray(d.numberOfPages) { i ->
                     val p = d.getPage(i)
                     val b = p.cropBox
