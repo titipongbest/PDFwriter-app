@@ -142,3 +142,19 @@ jobs:
         run: |
           gh release delete windows-latest -y --cleanup-tag 2>$null
           gh release create windows-latest PDFWriter-Windows.zip --target ${{ github.sha }} --prerelease --title "PDFWriter for Windows" --notes "Unzip, then run PDFWriter.exe (in the PDFWriter folder)."
+
+      - name: Add to the latest app release (next to the Android APK)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = (Select-String -Path src/main/kotlin/com/titipong/pdfwriter/ui/Shell.kt -Pattern 'APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          $tag = gh api repos/${{ github.repository }}/releases/latest --jq .tag_name
+          $apk = gh api repos/${{ github.repository }}/releases/latest --jq '.assets[] | select(.name | endswith(".apk")) | .name'
+          Copy-Item PDFWriter-Windows.zip "PDFWriter-Windows-v$ver.zip"
+          $old = gh api repos/${{ github.repository }}/releases/latest --jq '.assets[] | select(.name | startswith("PDFWriter-Windows")) | .name'
+          foreach ($o in $old) { if ($o -and $o -ne "PDFWriter-Windows-v$ver.zip") { gh release delete-asset $tag $o -y } }
+          gh release upload $tag "PDFWriter-Windows-v$ver.zip" --clobber
+          $andVer = $tag.TrimStart('v')
+          $notes = "**Android $tag** - install $apk`n`n**Windows v$ver** - download PDFWriter-Windows-v$ver.zip, unzip, run PDFWriter\PDFWriter.exe (no install needed)"
+          gh release edit $tag --title "PDFWriter $tag (Android) + v$ver (Windows)" --notes $notes
