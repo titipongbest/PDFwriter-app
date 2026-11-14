@@ -24,6 +24,9 @@ import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.PDResources
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
+import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
+import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
+import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import com.tom_roush.pdfbox.pdmodel.font.PDFont
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
@@ -51,6 +54,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
@@ -105,6 +109,39 @@ object PdfAnnotationIO {
     private val writeLock = Mutex()
 
     // ------------------------------------------------------------------ read
+
+    class PasswordRequiredException(val wrongPassword: Boolean) : IOException(
+        if (wrongPassword) "Incorrect password" else "Password required"
+    )
+
+    /**
+     * Unlocks an encrypted PDF file in place so Android's PdfRenderer and PDFBox readers can
+     * process it without a password. Throws [PasswordRequiredException] if a password is needed
+     * or incorrect. Returns true if the file was encrypted and unlocked.
+     */
+    fun decryptInPlace(file: File, password: String?): Boolean {
+        val dir = file.parentFile ?: file.absoluteFile.parentFile
+        val tmp = File(dir, "${file.name}.dec.tmp")
+        try {
+            val wasEncrypted = try {
+                PDDocument.load(file, password ?: "", MemoryUsageSetting.setupTempFileOnly()).use { doc ->
+                    if (!doc.isEncrypted) return false
+                    doc.isAllSecurityToBeRemoved = true
+                    doc.save(tmp)
+                    true
+                }
+            } catch (e: InvalidPasswordException) {
+                throw PasswordRequiredException(wrongPassword = password != null)
+            }
+            if (wasEncrypted && !tmp.renameTo(file)) {
+                file.delete()
+                if (!tmp.renameTo(file)) throw IOException("Cannot replace decrypted file")
+            }
+            return wasEncrypted
+        } finally {
+            tmp.delete()
+        }
+    }
 
     class ReadResult(
         val pages: MutableMap<Int, PageAnnotations>,
@@ -372,44 +409,48 @@ object PdfAnnotationIO {
         bookmarks: List<Bookmark>,
         dest: Uri,
         flatten: Boolean = false,
-        dropFileOutline: Boolean = false
+        dropFileOutline: Boolean = false,
+        password: String? = null
     ) = writeLock.withLock {
         withContext(Dispatchers.IO) {
             val out = File(context.cacheDir, "pdfwriter-out.pdf")
-            buildInto(source, pages, bookmarks, out, flatten, dropFileOutline)
-            val expected = sha1(out.inputStream())
-            fun kept(): Boolean = try {
-                context.contentResolver.openInputStream(dest)?.let { sha1(it) }?.contentEquals(expected) == true
-            } catch (e: Exception) {
-                false
-            }
             try {
-                val os = try {
-                    context.contentResolver.openOutputStream(dest, "wt")
+                buildInto(source, pages, bookmarks, out, flatten, dropFileOutline, password)
+                val expected = sha1(out.inputStream())
+                fun kept(): Boolean = try {
+                    context.contentResolver.openInputStream(dest)?.let { sha1(it) }?.contentEquals(expected) == true
                 } catch (e: Exception) {
-                    context.contentResolver.openOutputStream(dest, "w")
-                } ?: throw java.io.IOException("Cannot write")
-                os.use { o -> out.inputStream().use { it.copyTo(o) } }
-            } catch (e: Exception) {
-                // Tried again below.
+                    false
+                }
+                try {
+                    val os = try {
+                        context.contentResolver.openOutputStream(dest, "wt")
+                    } catch (e: Exception) {
+                        context.contentResolver.openOutputStream(dest, "w")
+                    } ?: throw IOException("Cannot write")
+                    os.use { o -> out.inputStream().use { it.copyTo(o) } }
+                } catch (e: Exception) {
+                    // Tried again below.
+                }
+                if (!kept()) {
+                    // Some file apps ignore "truncate" (old bytes stay at the end and readers see the old
+                    // file) or drop the write: write through the file itself, cut to the new length.
+                    context.contentResolver.openFileDescriptor(dest, "rw")?.use { pfd ->
+                        java.io.FileOutputStream(pfd.fileDescriptor).use { fos ->
+                            val ch = fos.channel
+                            ch.truncate(0)
+                            ch.position(0)
+                            out.inputStream().use { it.copyTo(fos) }
+                            fos.flush()
+                            ch.truncate(out.length())
+                            try { fos.fd.sync() } catch (e: Exception) { }
+                        }
+                    } ?: throw IOException("Cannot write")
+                    if (!kept()) throw IOException("The file didn't keep the changes")
+                }
+            } finally {
+                out.delete()
             }
-            if (!kept()) {
-                // Some file apps ignore "truncate" (old bytes stay at the end and readers see the old
-                // file) or drop the write: write through the file itself, cut to the new length.
-                context.contentResolver.openFileDescriptor(dest, "rw")?.use { pfd ->
-                    java.io.FileOutputStream(pfd.fileDescriptor).use { fos ->
-                        val ch = fos.channel
-                        ch.truncate(0)
-                        ch.position(0)
-                        out.inputStream().use { it.copyTo(fos) }
-                        fos.flush()
-                        ch.truncate(out.length())
-                        try { fos.fd.sync() } catch (e: Exception) { }
-                    }
-                } ?: throw java.io.IOException("Cannot write")
-                if (!kept()) throw java.io.IOException("The file didn't keep the changes")
-            }
-            out.delete()
         }
     }
 
@@ -431,9 +472,10 @@ object PdfAnnotationIO {
         bookmarks: List<Bookmark>,
         out: File,
         flatten: Boolean = false,
-        dropFileOutline: Boolean = false
+        dropFileOutline: Boolean = false,
+        password: String? = null
     ) = writeLock.withLock {
-        withContext(Dispatchers.IO) { buildInto(source, pages, bookmarks, out, flatten, dropFileOutline) }
+        withContext(Dispatchers.IO) { buildInto(source, pages, bookmarks, out, flatten, dropFileOutline, password) }
     }
 
     private fun buildInto(
@@ -442,7 +484,8 @@ object PdfAnnotationIO {
         bookmarks: List<Bookmark>,
         out: File,
         flatten: Boolean,
-        dropFileOutline: Boolean
+        dropFileOutline: Boolean,
+        password: String? = null
     ) {
         PDDocument.load(source, MemoryUsageSetting.setupTempFileOnly()).use { doc ->
             if (doc.isEncrypted) doc.isAllSecurityToBeRemoved = true
@@ -466,6 +509,13 @@ object PdfAnnotationIO {
             }
             writeBookmarks(doc, bookmarks, dropFileOutline)
             if (flatten) flattenAnnotations(doc)
+            if (!password.isNullOrEmpty()) {
+                doc.isAllSecurityToBeRemoved = false
+                val spp = StandardProtectionPolicy(password, password, AccessPermission()).apply {
+                    encryptionKeyLength = 256
+                }
+                doc.protect(spp)
+            }
             doc.save(out)
         }
     }
