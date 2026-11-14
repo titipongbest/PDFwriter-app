@@ -41,8 +41,11 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.titipong.pdfwriter.databinding.ActivityMainBinding
 import com.titipong.pdfwriter.export.PageExporter
 import com.titipong.pdfwriter.model.Bookmark
@@ -136,6 +139,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private var localCopy: File? = null
     /** True when the ink can be written into the original PDF file. */
     private var pdfWritable = false
+    /** Password of the currently open encrypted PDF (so auto-saves preserve the lock). */
+    private var docPassword: String? = null
+    /** Session cache of passwords for open encrypted tabs, keyed by [docKey]. */
+    private val tabPasswords = HashMap<String, String>()
     private var pages: MutableMap<Int, PageAnnotations> = mutableMapOf()
     private var bookmarks: MutableList<Bookmark> = mutableListOf()
     private var outline: List<OutlineEntry> = emptyList()
@@ -247,17 +254,24 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         readOnlyUri = null
         if (uri == null) return@registerForActivityResult
         persistPermission(uri)
-        if (old != null && docUri?.toString() == old.toString() && uri.toString() != old.toString()) {
-            // Carry the ink over to the new link, marked "not yet in the file", then reopen: it gets written.
-            saveNow()
-            try {
-                AnnotationStorage.save(
-                    applicationContext, AnnotationStorage.keyFor(uri.toString()),
-                    AnnotationStorage.toJson(pages, bookmarks, synced = false), ++saveSeq
-                )
-            } catch (e: Exception) { }
-            tabs.removeAll { it.uri == old.toString() }
-            saveTabs()
+        if (old != null && docUri?.toString() == old.toString()) {
+            val newKey = AnnotationStorage.keyFor(uri.toString())
+            docPassword?.let { pw ->
+                tabPasswords[newKey] = pw
+                prefs.edit().putBoolean("enc_$newKey", true).apply()
+            }
+            if (uri.toString() != old.toString()) {
+                // Carry the ink over to the new link, marked "not yet in the file", then reopen: it gets written.
+                saveNow()
+                try {
+                    AnnotationStorage.save(
+                        applicationContext, newKey,
+                        AnnotationStorage.toJson(pages, bookmarks, synced = false), ++saveSeq
+                    )
+                } catch (e: Exception) { }
+                tabs.removeAll { it.uri == old.toString() }
+                saveTabs()
+            }
         }
         openPdf(uri, remember = true, silent = false, force = true)
     }
@@ -268,6 +282,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private val exportFlat = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) exportCopy(uri, flatten = true)
+    }
+
+    /** Export with password: (password, flatten) waiting for destination URI. */
+    private var pendingProtectedExport: Pair<String, Boolean>? = null
+    private val exportProtected = registerForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val spec = pendingProtectedExport
+        pendingProtectedExport = null
+        if (uri != null && spec != null) exportCopy(uri, flatten = spec.second, password = spec.first)
     }
 
     // Extract pages: the pages picked in the overview, waiting for a destination.
@@ -1281,9 +1303,10 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             pdfJob?.cancel()
             val dir = File(filesDir, "docs").apply { mkdirs() }
             val rebuilt = File(dir, "$key.edit.pdf")
+            val pw = if (!openAfter) docPassword else null
             val result = try {
                 change.transform(src, rebuilt)
-                PdfAnnotationIO.write(applicationContext, rebuilt, newPages, newBookmarks, dest)
+                PdfAnnotationIO.write(applicationContext, rebuilt, newPages, newBookmarks, dest, password = pw)
                 true
             } catch (e: Throwable) {
                 false
@@ -1549,11 +1572,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val key = docKey ?: return
         val snap = snapshotPages()
         val snapBookmarks = snapshotBookmarks()
+        val pw = docPassword
         pdfSavedVersion = version // claim it; reset below if the write fails
         setStatus(R.string.saving_pdf)
         App.scope.launch {
             val ok = try {
-                PdfAnnotationIO.write(applicationContext, src, snap, snapBookmarks, dest)
+                PdfAnnotationIO.write(applicationContext, src, snap, snapBookmarks, dest, password = pw)
                 true
             } catch (e: Throwable) {
                 false
@@ -1642,17 +1666,94 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun showExportDialog() {
         if (document == null) return
         val base = docName.removeSuffix(".pdf")
+        val copySub = getString(if (docPassword != null) R.string.opt_copy_unlock_s else R.string.opt_copy_s)
+        val flatSub = getString(if (docPassword != null) R.string.opt_flat_unlock_s else R.string.opt_flat_s)
         com.titipong.pdfwriter.ui.OptionSheet.show(this, getString(R.string.export_title), listOf(
-            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_copy, getString(R.string.opt_copy_t), getString(R.string.opt_copy_s)),
-            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_cover, getString(R.string.opt_flat_t), getString(R.string.opt_flat_s)),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_copy, getString(R.string.opt_copy_t), copySub),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_cover, getString(R.string.opt_flat_t), flatSub),
+            com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_lock, getString(R.string.opt_protect_t), getString(R.string.opt_protect_s)),
             com.titipong.pdfwriter.ui.OptionSheet.Option(R.drawable.ic_pages, getString(R.string.opt_extract_t), getString(R.string.opt_extract_s))
         )) { which ->
             when (which) {
                 0 -> exportPdf.launch("$base-copy.pdf")
                 1 -> exportFlat.launch("$base-flattened.pdf")
+                2 -> promptExportPassword { pw, flatten ->
+                    pendingProtectedExport = pw to flatten
+                    exportProtected.launch("$base-protected.pdf")
+                }
                 else -> openExtractPicker()
             }
         }
+    }
+
+    private fun promptExportPassword(onConfirm: (password: String, flatten: Boolean) -> Unit) {
+        val pad = (20 * density).toInt()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        fun makePasswordField(hintRes: Int): Pair<TextInputLayout, TextInputEditText> {
+            val til = TextInputLayout(this).apply {
+                boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+                endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
+                hint = getString(hintRes)
+            }
+            val et = TextInputEditText(til.context).apply {
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                setSingleLine(true)
+                maxLines = 1
+            }
+            til.addView(et)
+            et.doAfterTextChanged { til.error = null }
+            return til to et
+        }
+        val (til1, et1) = makePasswordField(R.string.password_hint)
+        val (til2, et2) = makePasswordField(R.string.password_confirm_hint)
+        root.addView(til1, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(til2, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (12 * density).toInt() })
+
+        val flattenRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(0, (12 * density).toInt(), 0, 0)
+        }
+        val flattenLabel = android.widget.TextView(this).apply {
+            setText(R.string.export_protect_flatten)
+            textSize = 14f
+            setTextColor(Color.parseColor("#374151"))
+        }
+        val flattenSwitch = MaterialSwitch(this)
+        flattenRow.addView(flattenLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        flattenRow.addView(flattenSwitch)
+        flattenRow.setOnClickListener { flattenSwitch.toggle() }
+        root.addView(flattenRow)
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.export_protect_title)
+            .setView(android.widget.ScrollView(this).apply { addView(root) })
+            .setPositiveButton(R.string.ok, null)
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val p1 = et1.text?.toString() ?: ""
+                val p2 = et2.text?.toString() ?: ""
+                when {
+                    p1.isEmpty() -> til1.error = getString(R.string.password_empty)
+                    p1 != p2 -> til2.error = getString(R.string.password_mismatch)
+                    else -> {
+                        dialog.dismiss()
+                        onConfirm(p1, flattenSwitch.isChecked)
+                    }
+                }
+            }
+            et1.requestFocus()
+        }
+        dialog.show()
     }
 
     /** The page overview in "tick pages to extract" mode. */
@@ -1778,22 +1879,27 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         null
     }
 
-    private fun exportCopy(dest: Uri, flatten: Boolean = false) {
+    private fun exportCopy(dest: Uri, flatten: Boolean = false, password: String? = null) {
         val src = localCopy ?: return
         val snap = snapshotPages()
         val snapBookmarks = snapshotBookmarks()
         App.scope.launch {
             val ok = try {
-                PdfAnnotationIO.write(applicationContext, src, snap, snapBookmarks, dest, flatten = flatten)
+                PdfAnnotationIO.write(
+                    applicationContext, src, snap, snapBookmarks, dest,
+                    flatten = flatten, password = password
+                )
                 true
             } catch (e: Throwable) {
                 false
             }
-            Toast.makeText(
-                applicationContext,
-                if (!ok) R.string.save_pdf_failed else if (flatten) R.string.export_flat_done else R.string.export_done,
-                Toast.LENGTH_LONG
-            ).show()
+            val msg = when {
+                !ok -> R.string.save_pdf_failed
+                !password.isNullOrEmpty() -> R.string.export_protected_done
+                flatten -> R.string.export_flat_done
+                else -> R.string.export_done
+            }
+            Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1869,10 +1975,18 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         val needsPdfWrite: Boolean,
         /** Size/date of the source file when copied (null = the private copy was reused). */
         val copiedMeta: String? = null,
-        val hadSidecar: Boolean = true
+        val hadSidecar: Boolean = true,
+        val usedPassword: String? = null
     )
 
-    private fun openPdf(uri: Uri, remember: Boolean, silent: Boolean, force: Boolean = false) {
+    private fun openPdf(
+        uri: Uri,
+        remember: Boolean,
+        silent: Boolean,
+        force: Boolean = false,
+        password: String? = null,
+        reuseCopy: Boolean = false
+    ) {
         // Already the open document: nothing to load.
         if (!force && document != null && uri.toString() == docUri?.toString()) {
             refreshTabs()
@@ -1897,11 +2011,33 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             setStatus(R.string.loading)
             val name = queryName(uri)
             val key = AnnotationStorage.keyFor(uri.toString())
+            val effectivePassword = password ?: tabPasswords[key]
             rememberPage()
             val keep = tabs.map { AnnotationStorage.keyFor(it.uri) + ".pdf" }.toSet() +
                 listOfNotNull(localCopy?.name)
             val opened = try {
-                withContext(Dispatchers.IO) { loadDocument(uri, key, keep) }
+                withContext(Dispatchers.IO) { loadDocument(uri, key, keep, effectivePassword, reuseCopy) }
+            } catch (e: PdfAnnotationIO.PasswordRequiredException) {
+                binding.tvSaveState.text = ""
+                promptOpenPassword(
+                    name = name,
+                    wrongPassword = e.wrongPassword,
+                    onSubmit = { entered ->
+                        openPdf(uri, remember = remember, silent = false, force = true, password = entered, reuseCopy = true)
+                    },
+                    onCancel = {
+                        if (tabs.none { it.uri == uri.toString() } && localCopy?.name != "$key.pdf") {
+                            File(File(filesDir, "docs"), "$key.pdf").delete()
+                        }
+                        if (document != null) {
+                            setStatus(if (pdfWritable) R.string.saved_in_pdf else R.string.read_only_file)
+                        } else {
+                            binding.tvSaveState.text = ""
+                        }
+                        refreshTabs()
+                    }
+                )
+                return@launch
             } catch (e: Exception) {
                 binding.tvSaveState.text = ""
                 // A tab whose file is gone or no longer accessible is removed.
@@ -1924,6 +2060,14 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             docKey = key
             localCopy = opened.copy
             pdfWritable = opened.writable
+            docPassword = opened.usedPassword
+            if (opened.usedPassword != null) {
+                tabPasswords[key] = opened.usedPassword
+                prefs.edit().putBoolean("enc_$key", true).apply()
+            } else {
+                tabPasswords.remove(key)
+                prefs.edit().remove("enc_$key").apply()
+            }
             pages = opened.pages
             bookmarks = opened.bookmarks
             outline = opened.outline
@@ -1971,6 +2115,79 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
                 writePdfNow()
             }
         }
+    }
+
+    private fun promptOpenPassword(
+        name: String,
+        wrongPassword: Boolean,
+        onSubmit: (String) -> Unit,
+        onCancel: () -> Unit
+    ) {
+        val pad = (20 * density).toInt()
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        val til = TextInputLayout(this).apply {
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+            endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
+            hint = getString(R.string.password_hint)
+            if (wrongPassword) error = getString(R.string.password_incorrect)
+        }
+        val input = TextInputEditText(til.context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            setSingleLine(true)
+            maxLines = 1
+        }
+        til.addView(input)
+        input.doAfterTextChanged { til.error = null }
+        root.addView(til)
+
+        var submitted = false
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.password_required_title)
+            .setMessage(getString(R.string.password_required_msg, name))
+            .setView(root)
+            .setPositiveButton(R.string.open, null)
+            .setNegativeButton(R.string.cancel) { _, _ ->
+                if (!submitted) {
+                    submitted = true
+                    onCancel()
+                }
+            }
+            .setOnCancelListener {
+                if (!submitted) {
+                    submitted = true
+                    onCancel()
+                }
+            }
+            .create()
+
+        fun trySubmit() {
+            val pw = input.text?.toString() ?: ""
+            if (pw.isEmpty()) {
+                til.error = getString(R.string.password_empty)
+                return
+            }
+            submitted = true
+            dialog.dismiss()
+            onSubmit(pw)
+        }
+
+        input.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                trySubmit()
+                true
+            } else {
+                false
+            }
+        }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { trySubmit() }
+            input.requestFocus()
+        }
+        dialog.show()
     }
 
     /**
@@ -2030,7 +2247,13 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
      * Fast path (switching tabs): if the file hasn't changed since this app last copied or saved it,
      * the private copy and the app's saved ink are reused, so nothing is copied or parsed.
      */
-    private suspend fun loadDocument(uri: Uri, key: String, keepFiles: Set<String>): Opened {
+    private suspend fun loadDocument(
+        uri: Uri,
+        key: String,
+        keepFiles: Set<String>,
+        password: String?,
+        reuseCopy: Boolean
+    ): Opened {
         val dir = File(filesDir, "docs").apply { mkdirs() }
         val copy = File(dir, "$key.pdf")
         val meta = sourceMeta(uri)
@@ -2049,9 +2272,11 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             }
         }
         if (aliasPref != null) prefs.edit().putString(aliasPref, key).apply()
-        val fast = meta != null && side != null && copy.exists() && meta == prefs.getString("meta_$key", null)
+        val needsPromptBeforeFast = prefs.getBoolean("enc_$key", false) && password == null
+        val fast = !reuseCopy && !needsPromptBeforeFast && meta != null && side != null && copy.exists() &&
+            meta == prefs.getString("meta_$key", null)
 
-        if (!fast) {
+        if (!fast && !(reuseCopy && copy.exists())) {
             val tmp = File(dir, "$key.tmp")
             val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open")
             input.use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
@@ -2063,17 +2288,43 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         // Keep the copies of open tabs (and one whose save may still be running).
         dir.listFiles()?.forEach { if (it.name != copy.name && it.name !in keepFiles) it.delete() }
 
-        val doc = PdfDocumentRenderer.open(
-            ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
-            PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
-        )
+        var wasEncrypted = false
+        val doc = if (password != null && !fast) {
+            wasEncrypted = PdfAnnotationIO.decryptInPlace(copy, password)
+            PdfDocumentRenderer.open(
+                ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
+                PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
+            )
+        } else {
+            try {
+                PdfDocumentRenderer.open(
+                    ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
+                    PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
+                )
+            } catch (e: Throwable) {
+                if (e !is SecurityException && e !is IOException) throw e
+                val unlocked = try {
+                    PdfAnnotationIO.decryptInPlace(copy, null)
+                } catch (pe: PdfAnnotationIO.PasswordRequiredException) {
+                    throw pe
+                } catch (ignored: Throwable) {
+                    false
+                }
+                if (!unlocked) throw e
+                PdfDocumentRenderer.open(
+                    ParcelFileDescriptor.open(copy, ParcelFileDescriptor.MODE_READ_ONLY),
+                    PdfDocumentRenderer.diskCacheFor(cacheDir, copy)
+                )
+            }
+        }
+        val usedPassword = if (fast || wasEncrypted) password else null
         val writable = canWrite(uri)
 
         val fs = side
         if (fast && fs != null) {
             return Opened(
                 doc, copy, fs.pages, fs.bookmarks, AnnotationStorage.loadToc(applicationContext, key),
-                writable, needsPdfWrite = !fs.synced
+                writable, needsPdfWrite = !fs.synced, usedPassword = usedPassword
             )
         }
 
@@ -2089,7 +2340,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (fromPdf == null) {
             return Opened(
                 doc, copy, side?.pages ?: mutableMapOf(), side?.bookmarks ?: mutableListOf(), toc,
-                writable = false, needsPdfWrite = false, copiedMeta = meta, hadSidecar = true
+                writable = false, needsPdfWrite = false, copiedMeta = meta, hadSidecar = true,
+                usedPassword = usedPassword
             )
         }
         // The PDF file is the source of truth (it may have been edited in another app),
@@ -2098,7 +2350,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (sd != null && (!sd.synced || !writable)) {
             return Opened(
                 doc, copy, sd.pages, sd.bookmarks, toc, writable,
-                needsPdfWrite = !sd.synced, copiedMeta = meta
+                needsPdfWrite = !sd.synced, copiedMeta = meta, usedPassword = usedPassword
             )
         }
         // The file has less of this app's ink than was saved into it: the save didn't stick
@@ -2106,12 +2358,12 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (sd != null && countItems(sd.pages) > countItems(fromPdf.pages)) {
             return Opened(
                 doc, copy, sd.pages, sd.bookmarks, toc, writable,
-                needsPdfWrite = writable, copiedMeta = meta
+                needsPdfWrite = writable, copiedMeta = meta, usedPassword = usedPassword
             )
         }
         return Opened(
             doc, copy, fromPdf.pages, fromPdf.bookmarks, toc, writable,
-            needsPdfWrite = false, copiedMeta = meta, hadSidecar = false
+            needsPdfWrite = false, copiedMeta = meta, hadSidecar = false, usedPassword = usedPassword
         )
     }
 
@@ -2206,6 +2458,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         if (index < 0) return
         val wasActive = t.uri == docUri?.toString()
         if (wasActive) rememberPage()
+        tabPasswords.remove(AnnotationStorage.keyFor(t.uri))
         tabs.removeAt(index)
         saveTabs()
         if (wasActive) {
@@ -2235,6 +2488,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         docUri = null
         docKey = null
         localCopy = null
+        docPassword = null
         pages = mutableMapOf()
         bookmarks = mutableListOf()
         outline = emptyList()
