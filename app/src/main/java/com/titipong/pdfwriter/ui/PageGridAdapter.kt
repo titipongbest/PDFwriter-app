@@ -124,6 +124,8 @@ class PageGridAdapter(
 
     override fun getItemCount(): Int = slots.size
 
+    private val thumbViews = HashSet<PdfPageView>()
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val ctx = parent.context
         val d = ctx.resources.displayMetrics.density
@@ -137,7 +139,11 @@ class PageGridAdapter(
             val p = (3 * d).toInt()
             setPadding(p, p, p, p)
         }
-        val page = PdfPageView(ctx)
+        val page = PdfPageView(ctx).apply {
+            // Cache each small thumbnail as a single hardware texture so scrolling doesn't replay blend layers.
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
+        thumbViews.add(page)
         card.addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val check = TextView(ctx).apply {
             text = "✓"
@@ -184,13 +190,17 @@ class PageGridAdapter(
         v.pageAspect = aspectFor(position)
         v.annotations = src?.let(annotationsOf)
         v.bookmarked = src?.let(isBookmarked) ?: false
-        v.bitmap = null
+        val peeked = src?.let { doc.peek(it) }
+        v.bitmap = peeked
         holder.job?.cancel()
         if (src != null) {
-            holder.job = scope.launch {
-                val w = if (v.width > 0) v.width else THUMB_WIDTH
-                val bmp = try { doc.render(src, w) } catch (e: Exception) { null }
-                if (bmp != null && v.pageIndex == src) v.bitmap = bmp
+            val w = if (v.width > 0) v.width else THUMB_WIDTH
+            if (peeked == null || peeked.width < w * 0.9f) {
+                holder.job = scope.launch {
+                    val tw = if (v.width > 0) v.width else THUMB_WIDTH
+                    val bmp = try { doc.render(src, tw) } catch (e: Exception) { null }
+                    if (bmp != null && v.pageIndex == src) v.bitmap = bmp
+                }
             }
         }
         bindState(holder, position)
@@ -249,7 +259,12 @@ class PageGridAdapter(
     override fun onViewRecycled(holder: Holder) {
         holder.job?.cancel()
         holder.job = null
-        holder.page.release()
+        holder.page.clearContent()
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        thumbViews.forEach { it.release() }
+        thumbViews.clear()
     }
 
     companion object {
