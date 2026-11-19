@@ -151,7 +151,13 @@ class PageLoadPerfTest {
             ActivityScenario.launch<MainActivity>(intent).use { sc ->
                 Thread.sleep(1500)
                 sc.onActivity { a ->
+                    a.findViewById<RecyclerView>(R.id.recycler).scrollToPosition(32)
+                }
+                Thread.sleep(1500)
+                shot("main_highlighted")
+                sc.onActivity { a ->
                     a.findViewById<Toolbar>(R.id.toolbar).menu.performIdentifierAction(R.id.action_pages, 0)
+                    a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(0)
                     a.window.addOnFrameMetricsAvailableListener(listener, h)
                 }
                 Thread.sleep(1500)

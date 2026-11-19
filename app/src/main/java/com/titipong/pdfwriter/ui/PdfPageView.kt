@@ -234,17 +234,27 @@ class PdfPageView(context: Context) : View(context) {
     private val ribbonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EF4444") }
     private val ribbonPath = Path()
     private val highlightPaint = Paint()
-    private val hlLightMode = android.graphics.PorterDuffXfermode(
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) android.graphics.PorterDuff.Mode.MULTIPLY
-        else android.graphics.PorterDuff.Mode.DARKEN
-    )
-    private val hlDarkMode = android.graphics.PorterDuffXfermode(
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) android.graphics.PorterDuff.Mode.SCREEN
-        else android.graphics.PorterDuff.Mode.LIGHTEN
-    )
-    private fun highlightXfermode(paper: Int): android.graphics.PorterDuffXfermode {
-        val luma = Color.red(paper) * 299 + Color.green(paper) * 587 + Color.blue(paper) * 114
-        return if (luma < 128_000) hlDarkMode else hlLightMode
+    private val hlLightMode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DARKEN)
+    private val hlDarkMode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN)
+
+    private fun isDarkPaper(paper: Int): Boolean =
+        Color.red(paper) * 299 + Color.green(paper) * 587 + Color.blue(paper) * 114 < 128_000
+
+    private fun applyHighlightBlend(paint: Paint, paper: Int) {
+        val dark = isDarkPaper(paper)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            paint.xfermode = null
+            paint.blendMode = if (dark) android.graphics.BlendMode.SCREEN else android.graphics.BlendMode.MULTIPLY
+        } else {
+            paint.xfermode = if (dark) hlDarkMode else hlLightMode
+        }
+    }
+
+    private fun clearHighlightBlend(paint: Paint) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            paint.blendMode = null
+        }
+        paint.xfermode = null
     }
     private val selectionPaint = Paint().apply { color = Color.argb(80, 37, 99, 235) }
     private val hitPaint = Paint().apply { color = Color.argb(100, 250, 204, 21) }
@@ -481,31 +491,32 @@ class PdfPageView(context: Context) : View(context) {
             bitmapPaint.colorFilter = lk.pageFilter
             canvas.drawBitmap(bmp, null, dst, bitmapPaint)
         }
-        val hlMode = highlightXfermode(lk.paper)
+        val hlFilter = if (isDarkPaper(lk.paper)) null else lk.inkFilter
         val a = annotations
         val hasHl = a != null && (a.highlights.any { !it.underline } || a.strokes.any { it.highlighter })
         if (hasHl && a != null) {
             val cache = if (zoomScale() > 1.01f) null else ensureHighlightCache(a)
             if (cache != null) {
                 canvas.restore()
-                hlCachePaint.colorFilter = lk.inkFilter
-                hlCachePaint.xfermode = hlMode
+                hlCachePaint.colorFilter = hlFilter
+                applyHighlightBlend(hlCachePaint, lk.paper)
                 canvas.drawBitmap(cache, 0f, 0f, hlCachePaint)
+                clearHighlightBlend(hlCachePaint)
                 canvas.save()
                 canvas.concat(toView)
             } else {
-                renderHighlights(canvas, a, s, lk.inkFilter, hlXfermode = hlMode)
+                renderHighlights(canvas, a, s, hlFilter, hlPaper = lk.paper)
             }
         } else {
             hlDirty = true
             hlDirtyRect = null
         }
-        active?.takeIf { it.highlighter }?.let { drawStroke(canvas, it, s, lk.inkFilter, hlMode) }
+        active?.takeIf { it.highlighter }?.let { drawStroke(canvas, it, s, hlFilter, hlPaper = lk.paper) }
         a?.highlights?.forEach { hl ->
             if (hl.underline) {
                 highlightPaint.color = hl.color
                 highlightPaint.colorFilter = lk.inkFilter
-                highlightPaint.xfermode = null
+                clearHighlightBlend(highlightPaint)
                 for (r in hl.rects) {
                     val thick = max(r.height() * com.titipong.pdfwriter.pdf.PdfAnnotationIO.UNDERLINE_RATIO * s, 1.5f)
                     canvas.drawRect(r.left * s, r.bottom * s - thick, r.right * s, r.bottom * s, highlightPaint)
@@ -659,21 +670,21 @@ class PdfPageView(context: Context) : View(context) {
         s: Float,
         filter: ColorFilter?,
         region: RectF? = null,
-        hlXfermode: android.graphics.PorterDuffXfermode? = null
+        hlPaper: Int? = null
     ) {
         for (hl in a.highlights) {
             if (hl.underline) continue
             highlightPaint.color = hl.color
             highlightPaint.colorFilter = filter
-            highlightPaint.xfermode = hlXfermode
+            if (hlPaper != null) applyHighlightBlend(highlightPaint, hlPaper) else clearHighlightBlend(highlightPaint)
             highlightPaint.alpha = Math.round(com.titipong.pdfwriter.model.Opacity.of(hl.color, com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) * 255)
             for (r in hl.rects) canvas.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, highlightPaint)
         }
-        highlightPaint.xfermode = null
+        clearHighlightBlend(highlightPaint)
         for (st in a.strokes) {
             if (!st.highlighter) continue
             if (region != null && !RectF.intersects(region, boxOf(st))) continue
-            drawStroke(canvas, st, s, filter, hlXfermode)
+            drawStroke(canvas, st, s, filter, hlPaper)
         }
     }
 
@@ -747,14 +758,14 @@ class PdfPageView(context: Context) : View(context) {
         st: InkStroke,
         s: Float,
         filter: ColorFilter?,
-        hlXfermode: android.graphics.PorterDuffXfermode? = null
+        hlPaper: Int? = null
     ) {
         val pts = st.points
         if (pts.isEmpty()) return
         inkPaint.colorFilter = filter
         inkPaint.color = st.color
         if (st.highlighter) {
-            inkPaint.xfermode = hlXfermode
+            if (hlPaper != null) applyHighlightBlend(inkPaint, hlPaper) else clearHighlightBlend(inkPaint)
             inkPaint.alpha = Math.round(com.titipong.pdfwriter.model.Opacity.of(st.color, com.titipong.pdfwriter.model.Opacity.INK_DEFAULT) * 255)
             inkPaint.strokeCap = Paint.Cap.ROUND // rounded ends
             inkPaint.strokeWidth = st.width * s
@@ -763,9 +774,9 @@ class PdfPageView(context: Context) : View(context) {
             for (i in 1 until pts.size) path.lineTo(pts[i].x * s, pts[i].y * s)
             if (pts.size == 1) path.lineTo(pts[0].x * s + 0.1f, pts[0].y * s)
             canvas.drawPath(path, inkPaint)
-            inkPaint.xfermode = null
+            clearHighlightBlend(inkPaint)
         } else {
-            inkPaint.xfermode = null
+            clearHighlightBlend(inkPaint)
             inkPaint.strokeCap = Paint.Cap.ROUND
             if (pts.size == 1) {
                 inkPaint.strokeWidth = st.width * s * pressureScale(pts[0].pressure)
