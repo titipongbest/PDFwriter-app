@@ -500,10 +500,12 @@ object PdfAnnotationIO {
                 if (kept.size == existing.size && (snap == null || snap.isEmpty())) continue
                 val list = ArrayList<PDAnnotation>(kept)
                 if (snap != null && geo.displayWidth > 0f) {
-                    for (st in snap.strokes) if (st.points.isNotEmpty()) list.add(buildInk(doc, st, geo))
-                    for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
-                    for (h in snap.highlights) if (h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
+                    for (h in snap.highlights) if (!h.underline && h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
+                    for (st in snap.strokes) if (st.highlighter && st.points.isNotEmpty()) list.add(buildInk(doc, st, geo))
+                    for (h in snap.highlights) if (h.underline && h.rects.isNotEmpty()) list.add(buildHighlight(doc, h, geo))
                     for (im in snap.images) buildImage(doc, im, geo)?.let { list.add(it) }
+                    for (st in snap.strokes) if (!st.highlighter && st.points.isNotEmpty()) list.add(buildInk(doc, st, geo))
+                    for (t in snap.texts) list.add(buildText(doc, t, geo, fonts))
                 }
                 page.annotations = list
             }
