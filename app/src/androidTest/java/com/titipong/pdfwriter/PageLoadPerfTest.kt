@@ -95,12 +95,21 @@ class PageLoadPerfTest {
 
     @Test
     fun allPagesHighlightScroll() {
-        val uri = asset("text.pdf")
-        // Put dense highlighter strokes and text highlights on pages 10..49.
+        val dir = File(target.cacheDir, "perf").apply { mkdirs() }
+        val f = File(dir, "grid_hl.pdf")
+        if (f.exists()) {
+            f.setWritable(true)
+            f.delete()
+        }
+        inst.context.assets.open("text.pdf").use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+        f.setReadOnly()
+        val uri = Uri.fromFile(f)
+
+        // Pages 0..29: plain. Pages 30..79: dense highlighter strokes and text highlights.
         val pages = HashMap<Int, PageAnnotations>()
         val hlYellow = Color.parseColor("#FACC15")
         val hlGreen = Color.parseColor("#4ADE80")
-        for (p in 10 until 50) {
+        for (p in 30 until 80) {
             val pa = PageAnnotations()
             for (i in 0 until 25) {
                 val y = 0.08f + (i % 20) * 0.055f
@@ -126,10 +135,14 @@ class PageLoadPerfTest {
 
         val ht = HandlerThread("frame-metrics").apply { start() }
         val h = Handler(ht.looper)
-        val durationsMs = Collections.synchronizedList(ArrayList<Double>())
+        class FrameSample(val total: Double, val draw: Double, val sync: Double, val cmd: Double)
+        val samples = Collections.synchronizedList(ArrayList<FrameSample>())
         val listener = Window.OnFrameMetricsAvailableListener { _, fm, _ ->
-            val ns = fm.getMetric(FrameMetrics.TOTAL_DURATION)
-            if (ns > 0) durationsMs.add(ns / 1_000_000.0)
+            val total = fm.getMetric(FrameMetrics.TOTAL_DURATION) / 1_000_000.0
+            val draw = fm.getMetric(FrameMetrics.DRAW_DURATION) / 1_000_000.0
+            val sync = fm.getMetric(FrameMetrics.SYNC_DURATION) / 1_000_000.0
+            val cmd = fm.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION) / 1_000_000.0
+            if (total > 0) samples.add(FrameSample(total, draw, sync, cmd))
         }
 
         val intent = Intent(Intent.ACTION_VIEW, uri).setClass(target, MainActivity::class.java)
@@ -144,7 +157,7 @@ class PageLoadPerfTest {
                 Thread.sleep(1500)
 
                 fun measureScroll(label: String, steps: Int, dy: Int) {
-                    durationsMs.clear()
+                    samples.clear()
                     val t0 = System.nanoTime()
                     repeat(steps) {
                         sc.onActivity { a ->
@@ -154,28 +167,36 @@ class PageLoadPerfTest {
                     }
                     Thread.sleep(250)
                     val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
-                    val snap = synchronized(durationsMs) { durationsMs.sorted() }
+                    val snap = synchronized(samples) { samples.toList() }
                     if (snap.isEmpty()) {
                         Perf.log("grid_$label frames=0")
                     } else {
-                        val avg = snap.average()
-                        val p95 = snap[((snap.size - 1) * 0.95).toInt()]
-                        val max = snap.last()
-                        val jank16 = snap.count { it > 16.67 }
-                        val jank33 = snap.count { it > 33.33 }
+                        val totals = snap.map { it.total }.sorted()
+                        val avg = totals.average()
+                        val p95 = totals[((totals.size - 1) * 0.95).toInt()]
+                        val max = totals.last()
+                        val drawAvg = snap.map { it.draw }.average()
+                        val syncAvg = snap.map { it.sync }.average()
+                        val cmdAvg = snap.map { it.cmd }.average()
+                        val jank16 = totals.count { it > 16.67 }
+                        val jank33 = totals.count { it > 33.33 }
                         Perf.log(
                             String.format(
-                                "grid_%s frames=%d avg=%.2fms p95=%.2fms max=%.2fms jank16=%d jank33=%d elapsed=%.0fms",
-                                label, snap.size, avg, p95, max, jank16, jank33, elapsedMs
+                                "grid_%s frames=%d avg=%.2fms p95=%.2fms max=%.2fms draw=%.2fms sync=%.2fms cmd=%.2fms jank16=%d jank33=%d elapsed=%.0fms",
+                                label, snap.size, avg, p95, max, drawAvg, syncAvg, cmdAvg, jank16, jank33, elapsedMs
                             )
                         )
                     }
                 }
 
-                // 1) Scroll through plain pages (0..9)
-                measureScroll("plain", steps = 25, dy = 45)
-                // 2) Scroll into & through highlighted pages (10..49)
-                measureScroll("highlighted", steps = 110, dy = 60)
+                // 1) Scroll through plain pages (0..25)
+                measureScroll("plain", steps = 45, dy = 45)
+                // 2) Jump into highlighted range (page 32) and settle, then scroll through 32..75
+                sc.onActivity { a ->
+                    a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(32)
+                }
+                Thread.sleep(1500)
+                measureScroll("highlighted", steps = 60, dy = 50)
                 shot("allpages_highlighted")
                 sc.onActivity { a -> a.window.removeOnFrameMetricsAvailableListener(listener) }
             }
