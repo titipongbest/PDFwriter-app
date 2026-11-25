@@ -225,10 +225,22 @@ class PageLoadPerfTest {
 
                 // 1) Fast fling DOWN (0 -> 99) right through dense highlighted pages 25..74
                 measureFastFling("down_cold", down = true)
+                Thread.sleep(300)
                 shot("allpages_bottom")
                 // 2) Fast fling UP (99 -> 0) right back through dense highlighted pages 74..25
                 measureFastFling("up_first", down = false)
+                Thread.sleep(300)
                 shot("allpages_top")
+
+                // Visit highlighted rows briefly so PDF page images + highlights are fully composited in cache,
+                // then benchmark warm fast flings DOWN and UP across those rendered highlighted thumbnails.
+                for (hp in intArrayOf(28, 44, 60)) {
+                    sc.onActivity { a -> a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(hp) }
+                    Thread.sleep(650)
+                }
+                sc.onActivity { a -> a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(0) }
+                Thread.sleep(400)
+
                 // 3) Warm fast fling DOWN (0 -> 99) and UP (99 -> 0)
                 measureFastFling("down_warm", down = true)
                 measureFastFling("up_warm", down = false)
@@ -237,7 +249,7 @@ class PageLoadPerfTest {
                 sc.onActivity { a ->
                     a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(32)
                 }
-                Thread.sleep(800)
+                Thread.sleep(900)
                 shot("allpages_highlighted")
                 sc.onActivity { a -> a.window.removeOnFrameMetricsAvailableListener(listener) }
             }

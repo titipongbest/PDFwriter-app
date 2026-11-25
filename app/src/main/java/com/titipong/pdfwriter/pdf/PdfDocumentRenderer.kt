@@ -48,7 +48,7 @@ private class RenderLanes {
     var focus = 0
 
     init {
-        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY + 1 }.start()
+        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY }.start()
     }
 
     private fun rank(t: Task, focus: Int): Long {
@@ -154,13 +154,10 @@ class PdfDocumentRenderer private constructor(
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
 
-    /** Composited thumbnails (page + highlights + ink in RGB_565) for the All-pages overview grid. */
-    private val thumbs = object : LruCache<Int, CachedThumb>(48 * 1024 * 1024) {
+    /** Composited GPU HARDWARE thumbnails (page + highlights + ink) for the All-pages overview grid. */
+    private val thumbs = object : LruCache<Int, CachedThumb>(64 * 1024 * 1024) {
         override fun sizeOf(key: Int, value: CachedThumb): Int = value.bitmap.byteCount
     }
-
-    /** Reusable ARGB_8888 render surface owned exclusively by the single pdf-render thread. */
-    private var thumbRenderScratch: Bitmap? = null
 
     /** Frees memory when the system runs low ([hard]: keep only a few pages). */
     fun trimMemory(hard: Boolean) {
@@ -201,11 +198,9 @@ class PdfDocumentRenderer private constructor(
         val w = PREVIEW_WIDTH.coerceAtMost(bmp.width)
         val h = (w * bmp.height.toFloat() / bmp.width).toInt().coerceAtLeast(1)
         try {
-            val small = Bitmap.createScaledBitmap(bmp, w, h, true).copy(Bitmap.Config.RGB_565, false)
-            if (small != null) {
-                small.prepareToDraw()
-                previews.put(index, small)
-            }
+            val small = if (bmp.width == w && bmp.height == h) bmp else Bitmap.createScaledBitmap(bmp, w, h, true)
+            small.prepareToDraw()
+            previews.put(index, small)
         } catch (e: Throwable) { }
     }
 
@@ -235,7 +230,7 @@ class PdfDocumentRenderer private constructor(
         }
     }
 
-    /** Downsampled RGB_565 decode for grid thumbnails so saved full-res JPEGs don't allocate 25+ MB bitmaps. */
+    /** Downsampled decode for grid thumbnails so saved full-res JPEGs don't allocate 25+ MB bitmaps. */
     private fun loadThumbFromDisk(index: Int, minWidth: Int): Bitmap? {
         val f = diskFile(index) ?: return null
         if (!f.exists()) return null
@@ -247,7 +242,7 @@ class PdfDocumentRenderer private constructor(
             while (bounds.outWidth / (sample * 2) >= minWidth) sample *= 2
             val opts = BitmapFactory.Options().apply {
                 inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.RGB_565
+                inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             BitmapFactory.decodeFile(f.path, opts)
         } catch (e: Throwable) {
@@ -380,7 +375,7 @@ class PdfDocumentRenderer private constructor(
         }
     }
 
-    /** Renders a lightweight RGB_565 thumbnail via reusable scratch surface without polluting [cache]. */
+    /** Renders a lightweight thumbnail into [previews] without polluting full-res [cache]. */
     suspend fun renderThumb(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? {
         if (closed || index !in 0 until pageCount) return null
         quickThumb(index, targetWidth)?.let { return it }
@@ -398,33 +393,22 @@ class PdfDocumentRenderer private constructor(
                 return@withContext bmp
             }
             val page = renderer.openPage(index)
-            val scratch: Bitmap
+            val out: Bitmap
             try {
                 learnAspect(index, page)
                 val h = (want * aspects[index]).toInt().coerceAtLeast(1)
-                var s = thumbRenderScratch
-                if (s == null || s.isRecycled || s.width != want || s.height != h) {
-                    s?.recycle()
-                    s = try {
-                        Bitmap.createBitmap(want, h, Bitmap.Config.ARGB_8888)
-                    } catch (oom: OutOfMemoryError) {
-                        previews.trimToSize(16 * 1024 * 1024)
-                        thumbs.trimToSize(8 * 1024 * 1024)
-                        null
-                    }
-                    thumbRenderScratch = s
+                out = try {
+                    Bitmap.createBitmap(want, h, Bitmap.Config.ARGB_8888)
+                } catch (oom: OutOfMemoryError) {
+                    previews.trimToSize(16 * 1024 * 1024)
+                    thumbs.trimToSize(8 * 1024 * 1024)
+                    return@withContext null
                 }
-                scratch = s ?: return@withContext null
-                scratch.eraseColor(Color.WHITE)
-                page.render(scratch, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                out.eraseColor(Color.WHITE)
+                page.render(out, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             } finally {
                 page.close()
             }
-            val out = try {
-                scratch.copy(Bitmap.Config.RGB_565, false)
-            } catch (oom: OutOfMemoryError) {
-                null
-            } ?: return@withContext null
             out.prepareToDraw()
             previews.put(index, out)
             out
@@ -554,8 +538,6 @@ class PdfDocumentRenderer private constructor(
         lanes.post(Runnable {
             try { renderer.close() } catch (e: Exception) { }
             try { pfd.close() } catch (e: Exception) { }
-            thumbRenderScratch?.recycle()
-            thumbRenderScratch = null
             cache.evictAll()
             previews.evictAll()
             thumbs.evictAll()

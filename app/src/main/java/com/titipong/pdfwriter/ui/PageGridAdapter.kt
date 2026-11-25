@@ -91,7 +91,7 @@ class PageGridAdapter(
         override fun onDraw(canvas: Canvas) {
             canvas.drawColor(Color.WHITE)
             val bmp = bitmap
-            if (bmp != null && !bmp.isRecycled) {
+            if (bmp != null && !bmp.isRecycled && (bmp.config != Bitmap.Config.HARDWARE || canvas.isHardwareAccelerated)) {
                 dst.set(0f, 0f, width.toFloat(), height.toFloat())
                 canvas.drawBitmap(bmp, null, dst, bitmapPaint)
             }
@@ -124,6 +124,7 @@ class PageGridAdapter(
         val check: TextView
     ) : RecyclerView.ViewHolder(root) {
         var job: Job? = null
+        var needsLoad = false
         var boundSelected: Boolean? = null
         var longClickActive: Boolean? = null
         lateinit var longClickListener: View.OnLongClickListener
@@ -134,6 +135,27 @@ class PageGridAdapter(
 
     private var thumbWidth = THUMB_WIDTH
     private var prewarmJob: Job? = null
+
+    @Volatile
+    private var fastScrolling = false
+
+    private val scrollListener = object : RecyclerView.OnScrollListener() {
+        override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+            val threshold = (14f * rv.resources.displayMetrics.density).toInt().coerceAtLeast(18)
+            val wasFast = fastScrolling
+            fastScrolling = rv.scrollState == RecyclerView.SCROLL_STATE_SETTLING && abs(dy) > threshold
+            if (wasFast && !fastScrolling) {
+                bindVisiblePending(rv)
+            }
+        }
+
+        override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
+            if (newState != RecyclerView.SCROLL_STATE_SETTLING) {
+                fastScrolling = false
+                bindVisiblePending(rv)
+            }
+        }
+    }
 
     /** Selection only (for "extract pages"): no dragging, no move labels. */
     var pickMode = false
@@ -223,19 +245,36 @@ class PageGridAdapter(
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
+        fastScrolling = false
         thumbWidth = computeThumbWidth(recyclerView.context, recyclerView.width)
+        recyclerView.addOnScrollListener(scrollListener)
         startPrewarm()
     }
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
         super.onDetachedFromRecyclerView(recyclerView)
+        recyclerView.removeOnScrollListener(scrollListener)
+        fastScrolling = false
         prewarmJob?.cancel()
         prewarmJob = null
     }
 
+    private fun bindVisiblePending(rv: RecyclerView) {
+        for (i in 0 until rv.childCount) {
+            val h = rv.getChildViewHolder(rv.getChildAt(i)) as? Holder ?: continue
+            if (h.needsLoad && h.job?.isActive != true) {
+                val pos = h.bindingAdapterPosition
+                if (pos in slots.indices) {
+                    val src = slots[pos].source
+                    if (src != null) startLoad(h, src, aspectFor(pos))
+                }
+            }
+        }
+    }
+
     /**
      * Pre-composites annotated page thumbnails sequentially on a background worker (nearest to
-     * [startPage] first) so scrolling either down or up hits ready RGB_565 bitmaps immediately.
+     * [startPage] first) into GPU HARDWARE bitmaps so scrolling either down or up is instant.
      */
     private fun startPrewarm() {
         prewarmJob?.cancel()
@@ -249,6 +288,7 @@ class PageGridAdapter(
             if (targets.isEmpty()) return@launch
             targets.sortBy { abs(it - startPage) }
             for (p in targets) {
+                while (fastScrolling) delay(40)
                 ensureActive()
                 val a = annotationsOf(p) ?: continue
                 if (a.isEmpty()) continue
@@ -359,6 +399,7 @@ class PageGridAdapter(
         val v = holder.page
         holder.job?.cancel()
         holder.job = null
+        holder.needsLoad = false
         val aspect = aspectFor(position)
         v.pageIndex = src ?: -1
         v.pageAspect = aspect
@@ -372,66 +413,79 @@ class PageGridAdapter(
         doc.focusPage = src
         val tw = if (v.width > 0) v.width.coerceIn(240, 640) else thumbWidth
         val a = annotationsOf(src)
-        if (a == null || a.isEmpty()) {
-            val peeked = doc.peekThumb(src)
-            v.bitmap = peeked
-            if (peeked == null || peeked.width < tw * 0.85f) {
-                holder.job = scope.launch {
-                    val quick = try { doc.quickThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
-                    if (quick != null) {
-                        if (v.pageIndex == src) v.bitmap = quick
-                        return@launch
-                    }
-                    delay(FAST_SCROLL_DEBOUNCE_MS)
-                    val bmp = try { doc.renderThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
-                    if (bmp != null && v.pageIndex == src) v.bitmap = bmp
-                }
-            }
+        val stamp = if (a == null || a.isEmpty()) PLAIN_STAMP else PdfDocumentRenderer.annotStamp(a)
+        val cached = doc.getCachedThumb(src, stamp, tw)
+        if (cached != null && cached.hasPage) {
+            v.bitmap = cached.bitmap
         } else {
-            val stamp = PdfDocumentRenderer.annotStamp(a)
-            val cached = doc.getCachedThumb(src, stamp, tw)
-            if (cached != null && cached.hasPage) {
-                v.bitmap = cached.bitmap
-            } else {
-                val peeked = doc.peekThumb(src)
-                v.bitmap = cached?.bitmap ?: peeked
-                val snap = a.copy()
-                holder.job = scope.launch {
-                    val quickBase = peeked?.takeIf { it.width >= tw * 0.85f }
-                        ?: try { doc.quickThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
-                    if (quickBase != null) {
-                        val full = withContext(thumbDispatcher) {
-                            PdfPageView.renderThumbnail(quickBase, snap, tw, aspect)
-                        }
-                        if (full != null) {
-                            doc.putCachedThumb(src, stamp, hasPage = true, full)
-                            if (v.pageIndex == src) v.bitmap = full
-                        }
-                        return@launch
-                    }
-                    if (cached == null) {
-                        val prelim = withContext(thumbDispatcher) {
-                            PdfPageView.renderThumbnail(null, snap, tw, aspect)
-                        }
-                        if (prelim != null) {
-                            doc.putCachedThumb(src, stamp, hasPage = false, prelim)
-                            if (v.pageIndex == src) v.bitmap = prelim
-                        }
-                    }
-                    delay(FAST_SCROLL_DEBOUNCE_MS)
-                    val rendered = try { doc.renderThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
-                        ?: return@launch
-                    val full = withContext(thumbDispatcher) {
-                        PdfPageView.renderThumbnail(rendered, snap, tw, doc.aspects[src])
-                    }
-                    if (full != null) {
-                        doc.putCachedThumb(src, stamp, hasPage = true, full)
-                        if (v.pageIndex == src) v.bitmap = full
-                    }
-                }
+            v.bitmap = cached?.bitmap ?: doc.peekThumb(src)
+            holder.needsLoad = true
+            if (!fastScrolling) {
+                startLoad(holder, src, aspect)
             }
         }
         bindState(holder, position)
+    }
+
+    private fun startLoad(holder: Holder, src: Int, aspect: Float) {
+        val v = holder.page
+        if (v.pageIndex != src) return
+        val tw = if (v.width > 0) v.width.coerceIn(240, 640) else thumbWidth
+        val a = annotationsOf(src)
+        val hasAnnot = a != null && !a.isEmpty()
+        val stamp = if (hasAnnot && a != null) PdfDocumentRenderer.annotStamp(a) else PLAIN_STAMP
+        val cached = doc.getCachedThumb(src, stamp, tw)
+        if (cached != null && cached.hasPage) {
+            v.bitmap = cached.bitmap
+            holder.needsLoad = false
+            return
+        }
+        val snap = if (hasAnnot) a?.copy() else null
+        val peeked = doc.peekThumb(src)?.takeIf { it.width >= tw * 0.85f }
+        holder.job?.cancel()
+        holder.job = scope.launch {
+            val quickBase = peeked
+                ?: try { doc.quickThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
+            if (quickBase != null) {
+                val full = withContext(thumbDispatcher) {
+                    PdfPageView.renderThumbnail(quickBase, snap, tw, aspect)
+                }
+                if (full != null) {
+                    doc.putCachedThumb(src, stamp, hasPage = true, full)
+                    if (v.pageIndex == src) {
+                        v.bitmap = full
+                        holder.needsLoad = false
+                    }
+                }
+                return@launch
+            }
+            if (snap != null && cached == null) {
+                val prelim = withContext(thumbDispatcher) {
+                    PdfPageView.renderThumbnail(null, snap, tw, aspect)
+                }
+                if (prelim != null) {
+                    doc.putCachedThumb(src, stamp, hasPage = false, prelim)
+                    if (v.pageIndex == src) v.bitmap = prelim
+                }
+            }
+            delay(SETTLE_DEBOUNCE_MS)
+            while (fastScrolling) delay(40)
+            ensureActive()
+            if (v.pageIndex != src) return@launch
+            doc.focusPage = src
+            val rendered = try { doc.renderThumb(src, tw) } catch (ce: CancellationException) { throw ce } catch (_: Throwable) { null }
+                ?: return@launch
+            val full = withContext(thumbDispatcher) {
+                PdfPageView.renderThumbnail(rendered, snap, tw, doc.aspects[src])
+            }
+            if (full != null) {
+                doc.putCachedThumb(src, stamp, hasPage = true, full)
+                if (v.pageIndex == src) {
+                    v.bitmap = full
+                    holder.needsLoad = false
+                }
+            }
+        }
     }
 
     private fun aspectFor(position: Int): Float {
@@ -475,6 +529,7 @@ class PageGridAdapter(
     override fun onViewRecycled(holder: Holder) {
         holder.job?.cancel()
         holder.job = null
+        holder.needsLoad = false
         holder.page.pageIndex = -1
         holder.page.bitmap = null
     }
@@ -482,7 +537,8 @@ class PageGridAdapter(
     companion object {
         private const val STATE_PAYLOAD = "state"
         private const val THUMB_WIDTH = 320
-        private const val FAST_SCROLL_DEBOUNCE_MS = 32L
+        private const val PLAIN_STAMP = 0L
+        private const val SETTLE_DEBOUNCE_MS = 55L
 
         private val thumbDispatcher = Executors.newFixedThreadPool(2) { r ->
             Thread(r, "pdf-thumb").apply {

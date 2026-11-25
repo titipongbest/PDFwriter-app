@@ -1958,12 +1958,12 @@ class PdfPageView(context: Context) : View(context) {
 
         /**
          * Composites a page thumbnail (paper + [pageBmp] + MULTIPLY-blended highlights + ink/notes)
-         * on a background worker into a single opaque RGB_565 bitmap so thumbnail grids can scroll
-         * in any direction without UI-thread stroke rasterization or GPU blend-layer FBOs.
+         * on a background worker into an immutable GPU HARDWARE bitmap (ARGB_8888 fallback) so
+         * thumbnail grids scroll in any direction with zero UI-thread drawing and zero RenderThread sync uploads.
          */
         fun renderThumbnail(
             pageBmp: Bitmap?,
-            a: PageAnnotations,
+            a: PageAnnotations?,
             width: Int,
             pageAspect: Float
         ): Bitmap? {
@@ -1978,105 +1978,113 @@ class PdfPageView(context: Context) : View(context) {
                 sc.dst.set(0f, 0f, s, pageAspect * s)
                 c.drawBitmap(pageBmp, null, sc.dst, sc.bitmapPaint)
             }
-            val hasHl = a.highlights.any { !it.underline } || a.strokes.any { it.highlighter }
-            if (hasHl) {
-                val hlBmp = sc.ensureHl(width, height)
-                if (hlBmp != null) {
-                    hlBmp.eraseColor(Color.TRANSPARENT)
-                    val hc = Canvas(hlBmp)
-                    for (hl in a.highlights) {
-                        if (hl.underline) continue
-                        sc.highlightPaint.color = hl.color
-                        sc.highlightPaint.alpha = Math.round(
-                            com.titipong.pdfwriter.model.Opacity.of(hl.color, com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) * 255
-                        )
-                        for (r in hl.rects) hc.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, sc.highlightPaint)
+            if (a != null && !a.isEmpty()) {
+                val hasHl = a.highlights.any { !it.underline } || a.strokes.any { it.highlighter }
+                if (hasHl) {
+                    val hlBmp = sc.ensureHl(width, height)
+                    if (hlBmp != null) {
+                        hlBmp.eraseColor(Color.TRANSPARENT)
+                        val hc = Canvas(hlBmp)
+                        for (hl in a.highlights) {
+                            if (hl.underline) continue
+                            sc.highlightPaint.color = hl.color
+                            sc.highlightPaint.alpha = Math.round(
+                                com.titipong.pdfwriter.model.Opacity.of(hl.color, com.titipong.pdfwriter.model.Opacity.TEXT_DEFAULT) * 255
+                            )
+                            for (r in hl.rects) hc.drawRect(r.left * s, r.top * s, r.right * s, r.bottom * s, sc.highlightPaint)
+                        }
+                        for (st in a.strokes) {
+                            if (!st.highlighter) continue
+                            val pts = st.points
+                            if (pts.isEmpty()) continue
+                            sc.inkPaint.color = st.color
+                            sc.inkPaint.alpha = Math.round(
+                                com.titipong.pdfwriter.model.Opacity.of(st.color, com.titipong.pdfwriter.model.Opacity.INK_DEFAULT) * 255
+                            )
+                            sc.inkPaint.strokeWidth = st.width * s
+                            sc.path.reset()
+                            sc.path.moveTo(pts[0].x * s, pts[0].y * s)
+                            for (i in 1 until pts.size) sc.path.lineTo(pts[i].x * s, pts[i].y * s)
+                            if (pts.size == 1) sc.path.lineTo(pts[0].x * s + 0.1f, pts[0].y * s)
+                            hc.drawPath(sc.path, sc.inkPaint)
+                        }
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            sc.hlBlendPaint.xfermode = null
+                            sc.hlBlendPaint.blendMode = android.graphics.BlendMode.MULTIPLY
+                        } else {
+                            sc.hlBlendPaint.xfermode = sc.darkenMode
+                        }
+                        c.drawBitmap(hlBmp, 0f, 0f, sc.hlBlendPaint)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            sc.hlBlendPaint.blendMode = null
+                        }
+                        sc.hlBlendPaint.xfermode = null
                     }
-                    for (st in a.strokes) {
-                        if (!st.highlighter) continue
-                        val pts = st.points
-                        if (pts.isEmpty()) continue
-                        sc.inkPaint.color = st.color
-                        sc.inkPaint.alpha = Math.round(
-                            com.titipong.pdfwriter.model.Opacity.of(st.color, com.titipong.pdfwriter.model.Opacity.INK_DEFAULT) * 255
-                        )
-                        sc.inkPaint.strokeWidth = st.width * s
+                }
+                for (hl in a.highlights) {
+                    if (!hl.underline) continue
+                    sc.highlightPaint.color = hl.color
+                    for (r in hl.rects) {
+                        val thick = max(r.height() * com.titipong.pdfwriter.pdf.PdfAnnotationIO.UNDERLINE_RATIO * s, 1.5f)
+                        c.drawRect(r.left * s, r.bottom * s - thick, r.right * s, r.bottom * s, sc.highlightPaint)
+                    }
+                }
+                for (im in a.images) {
+                    val bmp = ImageCache.get(im.file) ?: continue
+                    sc.imageDst.set(im.x * s, im.y * s, (im.x + im.w) * s, (im.y + im.h) * s)
+                    c.drawBitmap(bmp, null, sc.imageDst, sc.imagePaint)
+                }
+                for (st in a.strokes) {
+                    if (st.highlighter) continue
+                    val pts = st.points
+                    if (pts.isEmpty()) continue
+                    sc.inkPaint.color = st.color
+                    if (pts.size == 1) {
+                        sc.inkPaint.strokeWidth = st.width * s * pressureScale(pts[0].pressure)
+                        c.drawPoint(pts[0].x * s, pts[0].y * s, sc.inkPaint)
+                        continue
+                    }
+                    val p0 = pts[0].pressure
+                    if (pts.all { it.pressure == p0 }) {
+                        sc.inkPaint.strokeWidth = st.width * s * pressureScale(p0)
                         sc.path.reset()
                         sc.path.moveTo(pts[0].x * s, pts[0].y * s)
                         for (i in 1 until pts.size) sc.path.lineTo(pts[i].x * s, pts[i].y * s)
-                        if (pts.size == 1) sc.path.lineTo(pts[0].x * s + 0.1f, pts[0].y * s)
-                        hc.drawPath(sc.path, sc.inkPaint)
-                    }
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                        sc.hlBlendPaint.xfermode = null
-                        sc.hlBlendPaint.blendMode = android.graphics.BlendMode.MULTIPLY
+                        c.drawPath(sc.path, sc.inkPaint)
                     } else {
-                        sc.hlBlendPaint.xfermode = sc.darkenMode
+                        for (i in 1 until pts.size) {
+                            val pa = pts[i - 1]
+                            val pb = pts[i]
+                            sc.inkPaint.strokeWidth = st.width * s * pressureScale((pa.pressure + pb.pressure) / 2f)
+                            c.drawLine(pa.x * s, pa.y * s, pb.x * s, pb.y * s, sc.inkPaint)
+                        }
                     }
-                    c.drawBitmap(hlBmp, 0f, 0f, sc.hlBlendPaint)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                        sc.hlBlendPaint.blendMode = null
-                    }
-                    sc.hlBlendPaint.xfermode = null
                 }
-            }
-            for (hl in a.highlights) {
-                if (!hl.underline) continue
-                sc.highlightPaint.color = hl.color
-                for (r in hl.rects) {
-                    val thick = max(r.height() * com.titipong.pdfwriter.pdf.PdfAnnotationIO.UNDERLINE_RATIO * s, 1.5f)
-                    c.drawRect(r.left * s, r.bottom * s - thick, r.right * s, r.bottom * s, sc.highlightPaint)
-                }
-            }
-            for (im in a.images) {
-                val bmp = ImageCache.get(im.file) ?: continue
-                sc.imageDst.set(im.x * s, im.y * s, (im.x + im.w) * s, (im.y + im.h) * s)
-                c.drawBitmap(bmp, null, sc.imageDst, sc.imagePaint)
-            }
-            for (st in a.strokes) {
-                if (st.highlighter) continue
-                val pts = st.points
-                if (pts.isEmpty()) continue
-                sc.inkPaint.color = st.color
-                if (pts.size == 1) {
-                    sc.inkPaint.strokeWidth = st.width * s * pressureScale(pts[0].pressure)
-                    c.drawPoint(pts[0].x * s, pts[0].y * s, sc.inkPaint)
-                    continue
-                }
-                val p0 = pts[0].pressure
-                if (pts.all { it.pressure == p0 }) {
-                    sc.inkPaint.strokeWidth = st.width * s * pressureScale(p0)
-                    sc.path.reset()
-                    sc.path.moveTo(pts[0].x * s, pts[0].y * s)
-                    for (i in 1 until pts.size) sc.path.lineTo(pts[i].x * s, pts[i].y * s)
-                    c.drawPath(sc.path, sc.inkPaint)
-                } else {
-                    for (i in 1 until pts.size) {
-                        val pa = pts[i - 1]
-                        val pb = pts[i]
-                        sc.inkPaint.strokeWidth = st.width * s * pressureScale((pa.pressure + pb.pressure) / 2f)
-                        c.drawLine(pa.x * s, pa.y * s, pb.x * s, pb.y * s, sc.inkPaint)
+                for (t in a.texts) {
+                    sc.textPaint.textSize = t.size * s
+                    val lines = TextLayout.lines(t.text, t.width) { sc.textPaint.measureText(it) / s }
+                    val bw = if (t.width > 0f) t.width else lines.maxOfOrNull { it.width } ?: 0f
+                    sc.textPaint.color = t.color
+                    lines.forEachIndexed { i, line ->
+                        val lx = t.x + TextLayout.offset(t.align, bw, line.width)
+                        val ly = t.y + t.size * TextLayout.LINE_HEIGHT * i
+                        c.drawText(line.text, lx * s, ly * s, sc.textPaint)
                     }
                 }
             }
-            for (t in a.texts) {
-                sc.textPaint.textSize = t.size * s
-                val lines = TextLayout.lines(t.text, t.width) { sc.textPaint.measureText(it) / s }
-                val bw = if (t.width > 0f) t.width else lines.maxOfOrNull { it.width } ?: 0f
-                sc.textPaint.color = t.color
-                lines.forEachIndexed { i, line ->
-                    val lx = t.x + TextLayout.offset(t.align, bw, line.width)
-                    val ly = t.y + t.size * TextLayout.LINE_HEIGHT * i
-                    c.drawText(line.text, lx * s, ly * s, sc.textPaint)
-                }
+            val hw = try {
+                comp.copy(Bitmap.Config.HARDWARE, false)
+            } catch (_: Throwable) {
+                null
             }
-            val out = try {
-                comp.copy(Bitmap.Config.RGB_565, false)
+            if (hw != null) return hw
+            val sw = try {
+                comp.copy(Bitmap.Config.ARGB_8888, false)
             } catch (_: OutOfMemoryError) {
                 null
             } ?: return null
-            out.prepareToDraw()
-            return out
+            sw.prepareToDraw()
+            return sw
         }
     }
 }
