@@ -171,7 +171,16 @@ class PageLoadPerfTest {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
             ActivityScenario.launch<MainActivity>(intent).use { sc ->
-                Thread.sleep(1200)
+                var ready = false
+                repeat(75) {
+                    if (!ready) {
+                        sc.onActivity { a ->
+                            ready = a.findViewById<RecyclerView>(R.id.recycler).adapter != null
+                        }
+                        if (!ready) Thread.sleep(200)
+                    }
+                }
+                check(ready) { "Document did not finish opening in time" }
                 // Visit a few highlighted pages in the reader first so full-res disk JPEGs also exist, like real usage.
                 for (rp in intArrayOf(28, 30, 32)) {
                     sc.onActivity { a -> a.findViewById<RecyclerView>(R.id.recycler).scrollToPosition(rp) }
@@ -180,10 +189,13 @@ class PageLoadPerfTest {
                 shot("main_highlighted")
                 sc.onActivity { a ->
                     a.findViewById<Toolbar>(R.id.toolbar).menu.performIdentifierAction(R.id.action_pages, 0)
+                    check(a.findViewById<android.view.View>(R.id.pagesPanel).visibility == android.view.View.VISIBLE) {
+                        "All pages panel did not open"
+                    }
                     a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(0)
                     a.window.addOnFrameMetricsAvailableListener(listener, h)
                 }
-                Thread.sleep(600)
+                Thread.sleep(800)
 
                 fun measureFastFling(label: String, down: Boolean) {
                     samples.clear()
