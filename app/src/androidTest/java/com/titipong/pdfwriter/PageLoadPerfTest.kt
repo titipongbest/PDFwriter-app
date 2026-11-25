@@ -105,26 +105,41 @@ class PageLoadPerfTest {
         f.setReadOnly()
         val uri = Uri.fromFile(f)
 
-        // Pages 0..29: plain. Pages 30..79: dense highlighter strokes and text highlights.
+        // Pages 0..24 and 75..99: plain. Pages 25..74: dense S Pen highlighter strokes (60 pts each) + text highlights.
         val pages = HashMap<Int, PageAnnotations>()
         val hlYellow = Color.parseColor("#FACC15")
         val hlGreen = Color.parseColor("#4ADE80")
-        for (p in 30 until 80) {
+        val penBlue = Color.parseColor("#2563EB")
+        for (p in 25 until 75) {
             val pa = PageAnnotations()
-            for (i in 0 until 25) {
-                val y = 0.08f + (i % 20) * 0.055f
-                val pts = mutableListOf(
-                    StrokePoint(0.08f, y, 0.5f),
-                    StrokePoint(0.45f, y + 0.002f, 0.5f),
-                    StrokePoint(0.88f, y, 0.5f)
-                )
+            for (i in 0 until 35) {
+                val y = 0.06f + (i % 25) * 0.052f
+                val pts = ArrayList<StrokePoint>(60)
+                for (k in 0 until 60) {
+                    val x = 0.08f + k * (0.82f / 59f)
+                    val wy = y + kotlin.math.sin(k * 0.25f) * 0.0018f
+                    pts.add(StrokePoint(x, wy, 0.5f))
+                }
                 pa.strokes.add(InkStroke(pts, if (i % 2 == 0) hlYellow else hlGreen, 0.025f, highlighter = true))
             }
-            for (i in 0 until 15) {
-                val y = 0.10f + (i % 15) * 0.07f
+            for (i in 0 until 20) {
+                val y = 0.09f + (i % 20) * 0.062f
                 pa.highlights.add(
-                    TextHighlight(listOf(RectF(0.10f, y, 0.85f, y + 0.022f)), hlYellow, "highlight", underline = false)
+                    TextHighlight(
+                        listOf(
+                            RectF(0.09f, y, 0.88f, y + 0.019f),
+                            RectF(0.09f, y + 0.022f, 0.65f, y + 0.041f)
+                        ),
+                        hlYellow,
+                        "highlight",
+                        underline = false
+                    )
                 )
+            }
+            for (i in 0 until 6) {
+                val y = 0.14f + i * 0.18f
+                val pts = mutableListOf(StrokePoint(0.05f, y, 0.4f), StrokePoint(0.07f, y + 0.015f, 0.7f), StrokePoint(0.06f, y + 0.03f, 0.5f))
+                pa.strokes.add(InkStroke(pts, penBlue, 0.004f, highlighter = false))
             }
             pages[p] = pa
         }
@@ -135,43 +150,55 @@ class PageLoadPerfTest {
 
         val ht = HandlerThread("frame-metrics").apply { start() }
         val h = Handler(ht.looper)
-        class FrameSample(val total: Double, val draw: Double, val sync: Double, val cmd: Double)
+        class FrameSample(
+            val total: Double,
+            val anim: Double,
+            val draw: Double,
+            val sync: Double,
+            val cmd: Double
+        )
         val samples = Collections.synchronizedList(ArrayList<FrameSample>())
         val listener = Window.OnFrameMetricsAvailableListener { _, fm, _ ->
             val total = fm.getMetric(FrameMetrics.TOTAL_DURATION) / 1_000_000.0
+            val anim = fm.getMetric(FrameMetrics.ANIMATION_DURATION) / 1_000_000.0
             val draw = fm.getMetric(FrameMetrics.DRAW_DURATION) / 1_000_000.0
             val sync = fm.getMetric(FrameMetrics.SYNC_DURATION) / 1_000_000.0
             val cmd = fm.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION) / 1_000_000.0
-            if (total > 0) samples.add(FrameSample(total, draw, sync, cmd))
+            if (total > 0) samples.add(FrameSample(total, anim, draw, sync, cmd))
         }
 
         val intent = Intent(Intent.ACTION_VIEW, uri).setClass(target, MainActivity::class.java)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
             ActivityScenario.launch<MainActivity>(intent).use { sc ->
-                Thread.sleep(1500)
-                sc.onActivity { a ->
-                    a.findViewById<RecyclerView>(R.id.recycler).scrollToPosition(32)
+                Thread.sleep(1200)
+                // Visit a few highlighted pages in the reader first so full-res disk JPEGs also exist, like real usage.
+                for (rp in intArrayOf(28, 30, 32)) {
+                    sc.onActivity { a -> a.findViewById<RecyclerView>(R.id.recycler).scrollToPosition(rp) }
+                    Thread.sleep(500)
                 }
-                Thread.sleep(1500)
                 shot("main_highlighted")
                 sc.onActivity { a ->
                     a.findViewById<Toolbar>(R.id.toolbar).menu.performIdentifierAction(R.id.action_pages, 0)
                     a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(0)
                     a.window.addOnFrameMetricsAvailableListener(listener, h)
                 }
-                Thread.sleep(1500)
+                Thread.sleep(600)
 
-                fun measureScroll(label: String, steps: Int, dy: Int) {
+                fun measureFastFling(label: String, down: Boolean) {
                     samples.clear()
+                    val latch = java.util.concurrent.CountDownLatch(1)
                     val t0 = System.nanoTime()
-                    repeat(steps) {
-                        sc.onActivity { a ->
-                            a.findViewById<RecyclerView>(R.id.pagesGrid).scrollBy(0, dy)
-                        }
-                        Thread.sleep(16)
+                    sc.onActivity { a ->
+                        val rv = a.findViewById<RecyclerView>(R.id.pagesGrid)
+                        val sign = if (down) 1 else -1
+                        val v = (rv.maxFlingVelocity * 0.9f).toInt() * sign
+                        rv.fling(0, v)
+                        rv.postDelayed({ rv.fling(0, v) }, 420)
+                        rv.postDelayed({ latch.countDown() }, 1250)
                     }
-                    Thread.sleep(250)
+                    latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                    Thread.sleep(150)
                     val elapsedMs = (System.nanoTime() - t0) / 1_000_000.0
                     val snap = synchronized(samples) { samples.toList() }
                     if (snap.isEmpty()) {
@@ -181,6 +208,7 @@ class PageLoadPerfTest {
                         val avg = totals.average()
                         val p95 = totals[((totals.size - 1) * 0.95).toInt()]
                         val max = totals.last()
+                        val animAvg = snap.map { it.anim }.average()
                         val drawAvg = snap.map { it.draw }.average()
                         val syncAvg = snap.map { it.sync }.average()
                         val cmdAvg = snap.map { it.cmd }.average()
@@ -188,21 +216,28 @@ class PageLoadPerfTest {
                         val jank33 = totals.count { it > 33.33 }
                         Perf.log(
                             String.format(
-                                "grid_%s frames=%d avg=%.2fms p95=%.2fms max=%.2fms draw=%.2fms sync=%.2fms cmd=%.2fms jank16=%d jank33=%d elapsed=%.0fms",
-                                label, snap.size, avg, p95, max, drawAvg, syncAvg, cmdAvg, jank16, jank33, elapsedMs
+                                "grid_%s frames=%d avg=%.2fms p95=%.2fms max=%.2fms anim=%.2fms draw=%.2fms sync=%.2fms cmd=%.2fms jank16=%d jank33=%d elapsed=%.0fms",
+                                label, snap.size, avg, p95, max, animAvg, drawAvg, syncAvg, cmdAvg, jank16, jank33, elapsedMs
                             )
                         )
                     }
                 }
 
-                // 1) Scroll through plain pages (0..25)
-                measureScroll("plain", steps = 45, dy = 45)
-                // 2) Jump into highlighted range (page 32) and settle, then scroll through 32..75
+                // 1) Fast fling DOWN (0 -> 99) right through dense highlighted pages 25..74
+                measureFastFling("down_cold", down = true)
+                shot("allpages_bottom")
+                // 2) Fast fling UP (99 -> 0) right back through dense highlighted pages 74..25
+                measureFastFling("up_first", down = false)
+                shot("allpages_top")
+                // 3) Warm fast fling DOWN (0 -> 99) and UP (99 -> 0)
+                measureFastFling("down_warm", down = true)
+                measureFastFling("up_warm", down = false)
+
+                // Settle on highlighted pages and capture screenshot to verify highlight visual fidelity.
                 sc.onActivity { a ->
                     a.findViewById<RecyclerView>(R.id.pagesGrid).scrollToPosition(32)
                 }
-                Thread.sleep(1500)
-                measureScroll("highlighted", steps = 60, dy = 50)
+                Thread.sleep(800)
                 shot("allpages_highlighted")
                 sc.onActivity { a -> a.window.removeOnFrameMetricsAvailableListener(listener) }
             }

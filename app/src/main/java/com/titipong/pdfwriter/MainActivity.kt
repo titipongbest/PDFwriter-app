@@ -989,6 +989,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun bookmarksChanged(page: Int) {
         adapter?.notifyPage(page, PageAdapter.INK_PAYLOAD)
+        gridAdapter?.refreshLabels()
         updateBookmarkButton()
         refreshBookmarkList()
         markDirty()
@@ -1059,10 +1060,15 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
     private fun openPanel(bookmarksTab: Boolean) {
         val doc = document ?: return
         val span = (resources.displayMetrics.widthPixels / (180 * density)).toInt().coerceAtLeast(2)
+        val start = currentPage().coerceAtLeast(0)
+        binding.pagesGrid.setItemViewCacheSize(span * 2)
+        binding.pagesGrid.recycledViewPool.setMaxRecycledViews(0, span * 4)
         binding.pagesGrid.layoutManager = GridLayoutManager(this, span)
         val g = PageGridAdapter(
             doc = doc,
             scope = lifecycleScope,
+            span = span,
+            startPage = start,
             annotationsOf = { pages[it] },
             isBookmarked = { isBookmarked(it) },
             onOpenPage = { jumpTo(it) },
@@ -1078,7 +1084,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         )
         gridAdapter = g
         binding.pagesGrid.adapter = g
-        binding.pagesGrid.scrollToPosition(currentPage().coerceAtLeast(0))
+        binding.pagesGrid.scrollToPosition(start)
         refreshBookmarkList()
         setEditMode(false)
         binding.pagesPanel.visibility = View.VISIBLE
@@ -1190,6 +1196,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         binding.toolStrip.visibility = View.VISIBLE
         binding.pagesGrid.adapter = null
         gridAdapter = null
+        document?.let { d -> focusPage().takeIf { it >= 0 }?.let { d.focusPage = it } }
         updateBackEnabled()
     }
 
