@@ -48,7 +48,7 @@ private class RenderLanes {
     var focus = 0
 
     init {
-        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY + 1 }.start()
+        Thread({ loop() }, "pdf-render").apply { priority = Thread.NORM_PRIORITY }.start()
     }
 
     private fun rank(t: Task, focus: Int): Long {
@@ -146,15 +146,23 @@ class PdfDocumentRenderer private constructor(
 
     private val main = Handler(Looper.getMainLooper())
 
+    class CachedThumb(val bitmap: Bitmap, val stamp: Long, val hasPage: Boolean)
+
     // Sharp pages already shown stay in memory (native memory, sized to the device's RAM), so going
     // back to them needs no loading at all. Shrinks when Android asks apps to free memory.
     private val cache = object : LruCache<Int, Bitmap>(MEMORY_CACHE) {
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
 
+    /** Composited GPU HARDWARE thumbnails (page + highlights + ink) for the All-pages overview grid. */
+    private val thumbs = object : LruCache<Int, CachedThumb>(64 * 1024 * 1024) {
+        override fun sizeOf(key: Int, value: CachedThumb): Int = value.bitmap.byteCount
+    }
+
     /** Frees memory when the system runs low ([hard]: keep only a few pages). */
     fun trimMemory(hard: Boolean) {
         cache.trimToSize(if (hard) MEMORY_CACHE / 8 else MEMORY_CACHE / 2)
+        thumbs.trimToSize(if (hard) 8 * 1024 * 1024 else 24 * 1024 * 1024)
         if (hard) previews.trimToSize(16 * 1024 * 1024)
     }
 
@@ -167,13 +175,32 @@ class PdfDocumentRenderer private constructor(
     fun peek(index: Int): Bitmap? = cache.get(index)?.takeIf { !it.isRecycled }
         ?: previews.get(index)?.takeIf { !it.isRecycled }
 
+    /** Small image already in memory for thumbnail grids (prefers RGB_565 preview over huge full-page bitmaps). */
+    fun peekThumb(index: Int): Bitmap? = previews.get(index)?.takeIf { !it.isRecycled }
+        ?: cache.get(index)?.takeIf { !it.isRecycled }
+
+    fun getCachedThumb(index: Int, stamp: Long, minWidth: Int): CachedThumb? {
+        val c = thumbs.get(index) ?: return null
+        val bmp = c.bitmap
+        if (bmp.isRecycled || c.stamp != stamp || bmp.width < minWidth * 0.85f) return null
+        if (index in aspects.indices && abs(bmp.height.toFloat() / bmp.width - aspects[index]) > 0.03f) return null
+        return c
+    }
+
+    fun putCachedThumb(index: Int, stamp: Long, hasPage: Boolean, bitmap: Bitmap) {
+        if (!closed && !bitmap.isRecycled) {
+            thumbs.put(index, CachedThumb(bitmap, stamp, hasPage))
+        }
+    }
+
     private fun keepPreview(index: Int, bmp: Bitmap) {
         if (previews.get(index) != null) return
         val w = PREVIEW_WIDTH.coerceAtMost(bmp.width)
         val h = (w * bmp.height.toFloat() / bmp.width).toInt().coerceAtLeast(1)
         try {
-            val small = Bitmap.createScaledBitmap(bmp, w, h, true).copy(Bitmap.Config.RGB_565, false)
-            if (small != null) previews.put(index, small)
+            val small = if (bmp.width == w && bmp.height == h) bmp else Bitmap.createScaledBitmap(bmp, w, h, true)
+            small.prepareToDraw()
+            previews.put(index, small)
         } catch (e: Throwable) { }
     }
 
@@ -198,6 +225,26 @@ class PdfDocumentRenderer private constructor(
             BitmapFactory.decodeFile(f.path, o)
             if (o.outWidth < minWidth * FIT) return null
             BitmapFactory.decodeFile(f.path)
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /** Downsampled decode for grid thumbnails so saved full-res JPEGs don't allocate 25+ MB bitmaps. */
+    private fun loadThumbFromDisk(index: Int, minWidth: Int): Bitmap? {
+        val f = diskFile(index) ?: return null
+        if (!f.exists()) return null
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.path, bounds)
+            if (bounds.outWidth < minWidth * FIT) return null
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= minWidth) sample *= 2
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            BitmapFactory.decodeFile(f.path, opts)
         } catch (e: Throwable) {
             null
         }
@@ -307,6 +354,64 @@ class PdfDocumentRenderer private constructor(
         } finally {
             page.close()
         }
+        }
+    }
+
+    /** Fast non-renderer thumbnail lookup from previews, memory cache, or downsampled disk JPEG. */
+    suspend fun quickThumb(index: Int, targetWidth: Int): Bitmap? {
+        if (closed || index !in 0 until pageCount) return null
+        val want = targetWidth.coerceIn(200, PREVIEW_WIDTH)
+        previews.get(index)?.takeIf { !it.isRecycled && it.width >= want * FIT }?.let { return it }
+        cache.get(index)?.takeIf { !it.isRecycled && it.width >= want * FIT }?.let { bmp ->
+            keepPreview(index, bmp)
+            return previews.get(index)?.takeIf { !it.isRecycled } ?: bmp
+        }
+        return withContext(Dispatchers.IO) {
+            if (closed) return@withContext null
+            loadThumbFromDisk(index, want)?.also { bmp ->
+                bmp.prepareToDraw()
+                previews.put(index, bmp)
+            }
+        }
+    }
+
+    /** Renders a lightweight thumbnail into [previews] without polluting full-res [cache]. */
+    suspend fun renderThumb(index: Int, targetWidth: Int, urgent: Boolean = true): Bitmap? {
+        if (closed || index !in 0 until pageCount) return null
+        quickThumb(index, targetWidth)?.let { return it }
+        val want = targetWidth.coerceIn(240, PREVIEW_WIDTH)
+        return withContext((if (urgent) lanes.urgent else lanes.background) + PageKey(index)) {
+            if (closed || index !in 0 until pageCount) return@withContext null
+            previews.get(index)?.takeIf { !it.isRecycled && it.width >= want * FIT }?.let { return@withContext it }
+            cache.get(index)?.takeIf { !it.isRecycled && it.width >= want * FIT }?.let { bmp ->
+                keepPreview(index, bmp)
+                return@withContext previews.get(index)?.takeIf { !it.isRecycled } ?: bmp
+            }
+            loadThumbFromDisk(index, want)?.let { bmp ->
+                bmp.prepareToDraw()
+                previews.put(index, bmp)
+                return@withContext bmp
+            }
+            val page = renderer.openPage(index)
+            val out: Bitmap
+            try {
+                learnAspect(index, page)
+                val h = (want * aspects[index]).toInt().coerceAtLeast(1)
+                out = try {
+                    Bitmap.createBitmap(want, h, Bitmap.Config.ARGB_8888)
+                } catch (oom: OutOfMemoryError) {
+                    previews.trimToSize(16 * 1024 * 1024)
+                    thumbs.trimToSize(8 * 1024 * 1024)
+                    return@withContext null
+                }
+                out.eraseColor(Color.WHITE)
+                page.render(out, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            } finally {
+                page.close()
+            }
+            out.prepareToDraw()
+            previews.put(index, out)
+            out
         }
     }
 
@@ -435,12 +540,26 @@ class PdfDocumentRenderer private constructor(
             try { pfd.close() } catch (e: Exception) { }
             cache.evictAll()
             previews.evictAll()
+            thumbs.evictAll()
             lanes.stop()
         }, urgent = false)
     }
 
     companion object {
         const val MAX_WIDTH = 2800
+
+        /** Fast identity stamp of all items on [a]; changes whenever any stroke/highlight/note/image is edited. */
+        fun annotStamp(a: com.titipong.pdfwriter.model.PageAnnotations): Long {
+            var h = 1125899906842597L
+            for (s in a.strokes) h = h * 31 + System.identityHashCode(s)
+            h = h * 31 - 1
+            for (hl in a.highlights) h = h * 31 + System.identityHashCode(hl)
+            h = h * 31 - 2
+            for (t in a.texts) h = h * 31 + System.identityHashCode(t)
+            h = h * 31 - 3
+            for (im in a.images) h = h * 31 + System.identityHashCode(im)
+            return h
+        }
 
         /** About 1/12 of the device's RAM, 160–512 MB (e.g. 512 MB = ~60 sharp pages). */
         private val MEMORY_CACHE: Int = run {
