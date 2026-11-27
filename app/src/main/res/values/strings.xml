@@ -45,7 +45,7 @@
     <string name="color_saturation">Saturation</string>
     <string name="color_brightness">Brightness</string>
     <string name="color_presets">Presets</string>
-    <string name="color_hint">Tap the selected color again, or long-press any color, to edit it</string>
+    <string name="color_hint">Tap the selected color again to edit it · long-press and drag to reorder</string>
     <string name="pages">All pages</string>
     <string name="tab_pages">Pages</string>
     <string name="tab_bookmarks">Bookmarks</string>
@@ -187,7 +187,7 @@
     <string name="mode_pick_title">Choose mode</string>
     <string name="mode_view_desc">View</string>
     <string name="mode_annotate_desc">Annotate</string>
-    <string name="markup_color_hint">Tap the selected color again, or long-press, to edit it</string>
+    <string name="markup_color_hint">Tap the selected color again to edit it · long-press and drag to reorder</string>
     <string name="size_type">Type a size</string>
     <string name="size_dialog_title">Size (0.1 – 10.0)</string>
     <string name="size_invalid">Enter a number from 0.1 to 10.0</string>
