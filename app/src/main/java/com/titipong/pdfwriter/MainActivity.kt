@@ -68,6 +68,7 @@ import com.titipong.pdfwriter.ui.PageGridAdapter
 import com.titipong.pdfwriter.ui.PdfPageView
 import com.titipong.pdfwriter.ui.ReadingAdapter
 import com.titipong.pdfwriter.ui.SettingsDialog
+import com.titipong.pdfwriter.ui.SwatchReorder
 import com.titipong.pdfwriter.ui.ViewConfig
 import com.titipong.pdfwriter.ui.ViewModeDialog
 import com.titipong.pdfwriter.ui.ViewSettings
@@ -608,23 +609,27 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
             }
         })
 
-        // Colors: tap = use, tap the selected one again or long-press = edit.
+        // Colors: tap = use, tap the selected one again = edit, long-press and drag = reorder.
         val dot = (34 * density).toInt()
         val gap = (4 * density).toInt()
-        DEFAULT_COLORS.indices.forEach { i ->
+        DEFAULT_COLORS.indices.forEach { _ ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
             v.contentDescription = getString(R.string.color)
-            v.setOnClickListener {
-                if (i == colorIndex) editColor(i) else selectColor(i)
-            }
-            v.setOnLongClickListener {
-                editColor(i)
-                true
-            }
             binding.colorRow.addView(v)
             colorViews.add(v)
         }
+        SwatchReorder.attach(
+            row = binding.colorRow,
+            views = colorViews,
+            count = { palette.size },
+            onTap = { i -> if (i == colorIndex) editColor(i) else selectColor(i) },
+            onMove = { from, to ->
+                val newSel = SwatchReorder.move(palette, colorIndex, from, to)
+                selectColor(newSel)
+                saveToolPrefs()
+            }
+        )
 
         // Size: 0.1 .. 10.0 in steps of 0.1
         binding.seekSize.max = MAX_SIZE_TENTHS - 1
@@ -728,6 +733,7 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
         listOf(binding.tvSizeLabel, binding.btnSizeMinus, binding.tvSize, binding.btnSizePlus, binding.sizeDivider)
             .forEach { it.visibility = sized }
         if (isPhone) binding.tvSizeLabel.visibility = View.GONE // no room on phones
+        SwatchReorder.reset(colorViews)
         if (hasColors) selectColor(colorIndex)
         binding.seekSize.progress = sizeTenths - 1
         showSize()
@@ -2549,19 +2555,25 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
         val dot = (34 * density).toInt()
         val gap = (4 * density).toInt()
-        markupPalette.indices.forEach { i ->
+        markupPalette.indices.forEach { _ ->
             val v = View(this)
             v.layoutParams = LinearLayout.LayoutParams(dot, dot).apply { marginEnd = gap }
             v.contentDescription = getString(R.string.color)
-            // Tap = use; tap the selected one again or long-press = edit it.
-            v.setOnClickListener { if (i == hlColorIndex) editMarkupColor(i) else selectHighlightColor(i) }
-            v.setOnLongClickListener {
-                editMarkupColor(i)
-                true
-            }
             binding.hlColorRow.addView(v)
             hlColorViews.add(v)
         }
+        // Tap = use; tap the selected one again = edit; long-press and drag = reorder.
+        SwatchReorder.attach(
+            row = binding.hlColorRow,
+            views = hlColorViews,
+            count = { markupPalette.size },
+            onTap = { i -> if (i == hlColorIndex) editMarkupColor(i) else selectHighlightColor(i) },
+            onMove = { from, to ->
+                val newSel = SwatchReorder.move(markupPalette, hlColorIndex, from, to)
+                prefs.edit().putString(PREF_HL_PALETTE, markupPalette.joinToString(",")).apply()
+                selectHighlightColor(newSel)
+            }
+        )
         selectHighlightColor(hlColorIndex)
 
         binding.btnMode.setOnClickListener { showModeMenu() }
@@ -2624,6 +2636,8 @@ class MainActivity : AppCompatActivity(), PdfPageView.Host {
 
     private fun showModeTools() {
         updateScrubber()
+        SwatchReorder.reset(colorViews)
+        SwatchReorder.reset(hlColorViews)
         binding.btnMode.setText(currentMode.label)
         binding.viewTools.visibility = if (interactionView) View.VISIBLE else View.GONE
         binding.annotateTools.visibility = if (interactionView) View.GONE else View.VISIBLE
